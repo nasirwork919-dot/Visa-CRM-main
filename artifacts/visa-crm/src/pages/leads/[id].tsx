@@ -66,6 +66,8 @@ export default function LeadDetail() {
   const updatePayment = useUpdateLeadPayment();
   const [uploading, setUploading] = useState(false);
   const [newStatus, setNewStatus] = useState('');
+  const [setupTotal, setSetupTotal] = useState('');
+  const [setupPaid, setSetupPaid] = useState('');
   const { settings } = useSettings();
 
   if (isLoading) return <SidebarLayout><div className="flex items-center justify-center h-64">Loading...</div></SidebarLayout>;
@@ -173,6 +175,30 @@ export default function LeadDetail() {
           </a>
         ) : undefined,
       });
+    } catch (e: any) {
+      toast({ title: 'Error', description: e.message, variant: 'destructive' });
+    }
+  };
+
+  const handleSetFee = async () => {
+    const total = Number(setupTotal);
+    if (!total || total <= 0) { toast({ title: 'Enter a valid total amount', variant: 'destructive' }); return; }
+    const hasPaymentRecords = (payments?.length || 0) > 0;
+    const paidVal = hasPaymentRecords ? (lead.amount_paid || 0) : (Number(setupPaid) || 0);
+    try {
+      const svc = calcGST(total, lead.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
+      await updateLead.mutateAsync({
+        id: id!,
+        updates: {
+          base_fee: total,
+          amount_paid: paidVal,
+          gst_amount: svc.gstAmount,
+          total_amount: svc.totalAmount,
+        },
+      });
+      toast({ title: 'Service fee saved' });
+      setSetupTotal('');
+      setSetupPaid('');
     } catch (e: any) {
       toast({ title: 'Error', description: e.message, variant: 'destructive' });
     }
@@ -443,50 +469,93 @@ export default function LeadDetail() {
 
           {/* Payments Tab */}
           <TabsContent value="payments" className="mt-4 space-y-4">
-            {/* Warning: fee not set but payments exist */}
-            {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 && (
+            {/* Fee setup — shown only when no fee was set during lead creation */}
+            {(lead.base_fee || 0) === 0 && can('leads_edit') ? (
+              <Card className="border-amber-200 bg-amber-50/40">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-amber-800">Set Service Fee</CardTitle>
+                  <p className="text-xs text-amber-700">Total fee was not set when this lead was created. Fill it in here.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-3 gap-4 items-end">
+                    <div>
+                      <Label>Total Amount (₹)</Label>
+                      <Input
+                        type="number"
+                        placeholder="e.g. 25000"
+                        value={setupTotal}
+                        onChange={e => setSetupTotal(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label>Paid (₹)</Label>
+                      {(payments?.length || 0) > 0 ? (
+                        <div className="mt-1">
+                          <p className="font-bold font-mono text-green-600 py-2">{formatINR(lead.amount_paid || 0)}</p>
+                          <p className="text-xs text-muted-foreground">From {payments!.length} payment record{payments!.length > 1 ? 's' : ''}</p>
+                        </div>
+                      ) : (
+                        <Input
+                          type="number"
+                          placeholder="0"
+                          value={setupPaid}
+                          onChange={e => setSetupPaid(e.target.value)}
+                          className="mt-1"
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <Label>Remaining</Label>
+                      {(() => {
+                        const total = Number(setupTotal) || 0;
+                        const paid = (payments?.length || 0) > 0 ? (lead.amount_paid || 0) : (Number(setupPaid) || 0);
+                        const rem = total - paid;
+                        if (total === 0) return <p className="font-bold font-mono text-muted-foreground mt-1 py-2">—</p>;
+                        if (rem > 0) return <p className="font-bold font-mono text-destructive mt-1 py-2">{formatINR(rem)}</p>;
+                        if (rem < 0) return <p className="font-bold font-mono text-amber-600 mt-1 py-2">+{formatINR(Math.abs(rem))} advance</p>;
+                        return <p className="font-bold font-mono text-green-600 mt-1 py-2">✓ Fully Paid</p>;
+                      })()}
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleSetFee}
+                    disabled={!setupTotal || Number(setupTotal) <= 0 || updateLead.isPending}
+                  >
+                    {updateLead.isPending ? 'Saving…' : 'Save Fee'}
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (lead.base_fee || 0) === 0 ? (
+              /* No edit permission + no fee set */
               <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
                 <span className="font-bold mt-0.5">⚠</span>
-                <div>
-                  <p className="font-semibold">Total service fee is not set</p>
-                  <p className="text-xs mt-0.5">
-                    {formatINR(lead.amount_paid)} has been recorded but the lead has no fee defined — balance cannot be calculated.
-                    Edit this lead (Service / Payment tab) to set the total fee.
-                  </p>
-                </div>
+                <p>Total service fee not set. Ask an admin to edit this lead and add the fee.</p>
               </div>
+            ) : (
+              /* Normal summary when fee is set */
+              <Card className="bg-muted/30">
+                <CardContent className="pt-4 pb-4">
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Fee</p>
+                      <p className="font-bold font-mono">{formatINR(service.totalAmount)}</p>
+                      {isUPI && <p className="text-[10px] text-amber-700 mt-0.5">incl. GST {formatINR(service.gstAmount)}</p>}
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Paid</p>
+                      <p className="font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Balance</p>
+                      <p className={`font-bold font-mono ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                        {balance > 0 ? formatINR(balance) : '✓ Paid'}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             )}
-
-            {/* Payment summary */}
-            <Card className="bg-muted/30">
-              <CardContent className="pt-4 pb-4">
-                <div className="grid grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Total Fee</p>
-                    <p className="font-bold font-mono">{(lead.base_fee || 0) > 0 ? formatINR(service.totalAmount) : <span className="text-amber-600">—</span>}</p>
-                    {isUPI && (lead.base_fee || 0) > 0 && (
-                      <p className="text-[10px] text-amber-700 mt-0.5">
-                        incl. GST {formatINR(service.gstAmount)}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Paid</p>
-                    <p className="font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Balance</p>
-                    {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 ? (
-                      <p className="font-bold font-mono text-amber-600">No fee set</p>
-                    ) : (
-                      <p className={`font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-                        {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
             {can('pay_record') && (
               <Card>

@@ -72,9 +72,9 @@ export default function LeadDetail() {
   const updatePayment = useUpdateLeadPayment();
   const [uploading, setUploading] = useState(false);
   const [newStatus, setNewStatus] = useState('');
-  const [addSvcForm, setAddSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
+  const [addSvcForm, setAddSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '', amount_paid: '' });
   const [editSvc, setEditSvc] = useState<any>(null);
-  const [editSvcForm, setEditSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
+  const [editSvcForm, setEditSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '', amount_paid: '' });
   const [setupTotal, setSetupTotal] = useState('');
   const [setupPaid, setSetupPaid] = useState('');
   const { settings } = useSettings();
@@ -237,21 +237,73 @@ export default function LeadDetail() {
   const handleAddService = async () => {
     const fee = Number(addSvcForm.base_fee) || 0;
     if (!addSvcForm.service_name && !fee) { toast({ title: 'Enter service name or fee', variant: 'destructive' }); return; }
+    const paidAmt = Number(addSvcForm.amount_paid) || 0;
     try {
       await createSvc.mutateAsync({ lead_id: id!, service_name: addSvcForm.service_name, base_fee: fee, payment_method: addSvcForm.payment_method, notes: addSvcForm.notes || null });
       await syncLeadTotals(id!);
-      setAddSvcForm({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
-      toast({ title: 'Service added' });
+
+      if (paidAmt > 0) {
+        const newTotalPaid = (lead.amount_paid || 0) + paidAmt;
+        await createPayment.mutateAsync({
+          lead_id: id!,
+          amount: paidAmt,
+          method: addSvcForm.payment_method,
+          note: addSvcForm.service_name ? `Payment for ${addSvcForm.service_name}` : 'Service payment',
+          payment_date: null,
+          received_by: profile?.id,
+        });
+        await updateLead.mutateAsync({ id: id!, updates: { amount_paid: newTotalPaid } });
+        const now = new Date();
+        const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { data: svcs } = await supabase.from('lead_services').select('*').eq('lead_id', id!);
+        const newTotalFee = svcs ? svcs.reduce((s: number, ls: any) => s + calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0) : fee;
+        const updatedLeadForWA = { ...lead, amount_paid: newTotalPaid, base_fee: newTotalFee };
+        const waUrl = (lead.whatsapp || lead.phone)
+          ? buildWAUrl(updatedLeadForWA, 'payment_received', { this_payment: formatINR(paidAmt), date, time })
+          : null;
+        toast({ title: 'Service added & payment recorded' });
+        if (waUrl && waUrl !== '#') setPaymentWA({ url: waUrl, amount: formatINR(paidAmt) });
+      } else {
+        toast({ title: 'Service added' });
+      }
+      setAddSvcForm({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '', amount_paid: '' });
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
 
   const handleUpdateService = async () => {
     if (!editSvc) return;
+    const paidAmt = Number(editSvcForm.amount_paid) || 0;
     try {
       await updateSvc.mutateAsync({ id: editSvc.id, updates: { service_name: editSvcForm.service_name, base_fee: Number(editSvcForm.base_fee) || 0, payment_method: editSvcForm.payment_method, notes: editSvcForm.notes || null } });
       await syncLeadTotals(id!);
+
+      if (paidAmt > 0) {
+        const newTotalPaid = (lead.amount_paid || 0) + paidAmt;
+        await createPayment.mutateAsync({
+          lead_id: id!,
+          amount: paidAmt,
+          method: editSvcForm.payment_method,
+          note: editSvcForm.service_name ? `Payment for ${editSvcForm.service_name}` : 'Service payment',
+          payment_date: null,
+          received_by: profile?.id,
+        });
+        await updateLead.mutateAsync({ id: id!, updates: { amount_paid: newTotalPaid } });
+        const now = new Date();
+        const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { data: svcs } = await supabase.from('lead_services').select('*').eq('lead_id', id!);
+        const newTotalFee = svcs ? svcs.reduce((s: number, ls: any) => s + calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0) : 0;
+        const updatedLeadForWA = { ...lead, amount_paid: newTotalPaid, base_fee: newTotalFee };
+        const waUrl = (lead.whatsapp || lead.phone)
+          ? buildWAUrl(updatedLeadForWA, 'payment_received', { this_payment: formatINR(paidAmt), date, time })
+          : null;
+        toast({ title: 'Service updated & payment recorded' });
+        if (waUrl && waUrl !== '#') setPaymentWA({ url: waUrl, amount: formatINR(paidAmt) });
+      } else {
+        toast({ title: 'Service updated' });
+      }
       setEditSvc(null);
-      toast({ title: 'Service updated' });
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
 
@@ -446,7 +498,7 @@ export default function LeadDetail() {
                           {can('leads_edit') && ls.id && (
                             <>
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0"
-                                onClick={() => { setEditSvc(ls); setEditSvcForm({ service_name: ls.service_name || '', base_fee: String(ls.base_fee || ''), payment_method: ls.payment_method || 'Cash', notes: ls.notes || '' }); }}>
+                                onClick={() => { setEditSvc(ls); setEditSvcForm({ service_name: ls.service_name || '', base_fee: String(ls.base_fee || ''), payment_method: ls.payment_method || 'Cash', notes: ls.notes || '', amount_paid: '' }); }}>
                                 <Pencil className="h-3.5 w-3.5" />
                               </Button>
                               <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive"
@@ -494,9 +546,14 @@ export default function LeadDetail() {
                           <Input className="mt-1 h-8 text-sm" placeholder="e.g. EK521" value={addSvcForm.notes}
                             onChange={e => setAddSvcForm(f => ({ ...f, notes: e.target.value }))} />
                         </div>
+                        <div>
+                          <Label className="text-xs">Amount Paid (₹)</Label>
+                          <Input className="mt-1 h-8 text-sm" type="number" placeholder="0 (optional)" value={addSvcForm.amount_paid}
+                            onChange={e => setAddSvcForm(f => ({ ...f, amount_paid: e.target.value }))} />
+                        </div>
                       </div>
-                      <Button size="sm" onClick={handleAddService} disabled={createSvc.isPending || updateLead.isPending}>
-                        {createSvc.isPending ? 'Adding…' : '+ Add Service'}
+                      <Button size="sm" onClick={handleAddService} disabled={createSvc.isPending || createPayment.isPending || updateLead.isPending}>
+                        {(createSvc.isPending || createPayment.isPending) ? 'Adding…' : '+ Add Service'}
                       </Button>
                     </div>
                   )}
@@ -860,11 +917,15 @@ export default function LeadDetail() {
               <Label>Notes (optional)</Label>
               <Input className="mt-1" value={editSvcForm.notes} onChange={e => setEditSvcForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
+            <div>
+              <Label>Amount Paid Now (₹) <span className="text-muted-foreground font-normal text-xs">— optional, records a new payment</span></Label>
+              <Input className="mt-1" type="number" placeholder="0" value={editSvcForm.amount_paid} onChange={e => setEditSvcForm(f => ({ ...f, amount_paid: e.target.value }))} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditSvc(null)}>Cancel</Button>
-            <Button onClick={handleUpdateService} disabled={updateSvc.isPending || updateLead.isPending}>
-              {updateSvc.isPending ? 'Saving…' : 'Save'}
+            <Button onClick={handleUpdateService} disabled={updateSvc.isPending || createPayment.isPending || updateLead.isPending}>
+              {(updateSvc.isPending || createPayment.isPending) ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
         </DialogContent>

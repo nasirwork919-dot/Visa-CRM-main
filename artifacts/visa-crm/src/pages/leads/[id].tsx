@@ -271,8 +271,16 @@ export default function LeadDetail() {
         const waUrl = (lead.whatsapp || lead.phone)
           ? buildWAUrl(updatedLeadForWA, 'payment_received', { this_payment: formatINR(paidAmt), date, time })
           : null;
-        toast({ title: 'Service added & payment recorded' });
-        if (waUrl && waUrl !== '#') setPaymentWA({ url: waUrl, amount: formatINR(paidAmt) });
+        toast({
+          title: 'Service added & payment recorded',
+          description: waUrl && waUrl !== '#' ? 'Send payment receipt on WhatsApp.' : undefined,
+          action: waUrl && waUrl !== '#' ? (
+            <a href={waUrl} target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1 rounded-md border border-[#25D366] px-3 py-1.5 text-xs font-medium text-[#25D366] hover:bg-green-50 transition-colors">
+              <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+            </a>
+          ) : undefined,
+        });
       } else {
         // No payment, but still offer WA to send service booking confirmation
         const now = new Date();

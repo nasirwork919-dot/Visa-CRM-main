@@ -557,7 +557,14 @@ export default function LeadDetail() {
               </Card>
             )}
 
-            {can('pay_record') && (
+            {can('pay_record') && (lead.base_fee || 0) > 0 && balance === 0 && (
+              <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-center gap-2">
+                <span className="text-green-600 font-bold">✓</span>
+                <p>This lead is <strong>fully paid</strong>. No further payment is required.</p>
+              </div>
+            )}
+
+            {can('pay_record') && !((lead.base_fee || 0) > 0 && balance === 0) && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Record Payment</CardTitle>

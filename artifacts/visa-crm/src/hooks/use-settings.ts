@@ -27,19 +27,19 @@ const SETTINGS_KEY = 'visa-crm-settings';
 
 export const DEFAULT_MESSAGES: MessageTemplates = {
   welcome:
-    'Hello {name},\n\nWelcome! We have initiated your *{service}* application.\n\nFee: {fee}\nGST: {gst}\nAmount Paid: {paid}\nBalance Due: {balance}\n\nWe will keep you updated on the progress.',
+    'Hello {name},\n\nWelcome!\n\nWe have initiated your {service} application.\n\n- Total Fee: {fee}\n- Amount Paid: {paid}\n- Balance Due: {balance}\n\nWe will keep you updated on the progress.',
   under_process:
-    'Hello {name},\n\nUpdate on your *{service}* application:\n\n📋 Status: *Under Process*\n\n⏳ We are processing your application and will keep you updated.\n\nFor any queries, feel free to reach out to us.',
+    'Hello {name},\n\nApplication Update\n\nService: {service}\nStatus: Under Process\n\nWe are actively processing your application and will keep you informed of any updates.',
   submitted:
-    'Hello {name},\n\nUpdate on your *{service}* application:\n\n📋 Status: *Submitted*\n\n✅ Your documents have been submitted to the embassy/consulate.\n\nFor any queries, feel free to reach out to us.',
+    'Hello {name},\n\nApplication Update\n\nService: {service}\nStatus: Submitted\n\nYour documents have been submitted to the embassy/consulate. We will notify you once there is an update.',
   completed:
-    'Hello {name},\n\n🎉 Great news! Your *{service}* application is now complete.\n\nThank you for choosing our services.',
+    'Hello {name},\n\nApplication Completed\n\nYour {service} application is now complete.\n\nThank you for choosing our services.',
   cancelled:
-    'Hello {name},\n\nRegarding your *{service}* application:\n\nYour application has been cancelled. Please contact us for further assistance.',
+    'Hello {name},\n\nApplication Update\n\nService: {service}\nStatus: Cancelled\n\nYour application has been cancelled. Please contact us for further assistance.',
   payment_received:
-    'Hello {name},\n\nWe have received your payment of *{this_payment}* on {date} at {time}.\n\nService: *{service}*\nTotal Fee: {fee}\nAmount Paid: *{this_payment}*\nTotal Paid: {paid}\nBalance: {balance}\n\nThank you! 🙏',
+    'Hello {name},\n\nPayment Received\n\nWe received {this_payment} on {date} at {time}.\n\nService: {service}\n- Total Fee: {fee}\n- Total Paid: {paid}\n- Balance Due: {balance}\n\nThank you!',
   payment_reminder:
-    'Hello {name},\n\nThis is a gentle reminder regarding your pending balance for the *{service}* application.\n\nTotal Fee: {fee}\nAmount Paid: {paid}\n*Balance Due: {balance}*\n\nPlease arrange for the payment at your earliest convenience.',
+    'Hello {name},\n\nPayment Reminder\n\nYou have a pending balance for your {service} application.\n\n- Total Fee: {fee}\n- Amount Paid: {paid}\n- Balance Due: {balance}\n\nPlease arrange for payment at the earliest convenience.',
 };
 
 // ─── Full Theme System ────────────────────────────────────────────────────────
@@ -259,12 +259,12 @@ export const SETTING_DEFAULTS: CRMSettings = {
   customColor: '#1A5FB4',
 };
 
-// Auto-migrate old message templates (e.g. payment_received without {this_payment})
+// Auto-migrate old message templates — reset any template that uses old markdown (*) formatting
 function migrateMessages(messages: MessageTemplates): MessageTemplates {
   const m = { ...messages };
-  if (!m.payment_received.includes('{this_payment}')) {
-    m.payment_received = DEFAULT_MESSAGES.payment_received;
-  }
+  (Object.keys(DEFAULT_MESSAGES) as (keyof MessageTemplates)[]).forEach(key => {
+    if (!m[key] || m[key].includes('*')) m[key] = DEFAULT_MESSAGES[key];
+  });
   return m;
 }
 

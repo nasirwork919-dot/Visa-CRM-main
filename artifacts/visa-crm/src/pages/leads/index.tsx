@@ -603,6 +603,19 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
           {waLead ? (() => {
             const isPayment = waLead.__waType === 'payment';
             const now = new Date();
+
+            // For new-lead WA (welcome), merge current form values so any payment
+            // details filled in the Payment tab after clicking "Create Lead" are used
+            const currentFee = form.base_fee !== '' ? Number(form.base_fee) : (waLead.base_fee || 0);
+            const currentPaid = form.amount_paid !== '' ? Number(form.amount_paid) : (waLead.amount_paid || 0);
+            const effectiveLead = isPayment ? waLead : {
+              ...waLead,
+              base_fee: currentFee,
+              amount_paid: currentPaid,
+              payment_method: form.payment_method || waLead.payment_method || 'Cash',
+              service_name: form.service_name || waLead.service_name || '',
+            };
+
             const paymentDelta = isPayment
               ? Math.max(0, Number(waLead.amount_paid || 0) - Number(waLead.__prevPaid || 0))
               : 0;
@@ -611,19 +624,44 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
               date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
               time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
             } : undefined;
+
+            const waUrl = buildWAUrl(effectiveLead, isPayment ? 'payment_received' : 'welcome', extraVars);
+
+            const handleSendWA = async () => {
+              // If payment details were filled after lead creation, save them to DB
+              if (!isPayment && (currentFee !== (waLead.base_fee || 0) || currentPaid !== (waLead.amount_paid || 0))) {
+                try {
+                  const svc = calcGST(currentFee, form.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
+                  await updateLead.mutateAsync({
+                    id: waLead.id,
+                    updates: {
+                      base_fee: currentFee,
+                      amount_paid: currentPaid,
+                      payment_method: form.payment_method || 'Cash',
+                      service_name: form.service_name || waLead.service_name || '',
+                      gst_amount: svc.gstAmount,
+                      total_amount: svc.totalAmount,
+                    },
+                  });
+                } catch {
+                  // non-critical — WA still opens
+                }
+              }
+              window.open(waUrl, '_blank');
+              setWaLead(null);
+              onClose();
+            };
+
             return (
               <div className="flex items-center gap-2 w-full justify-end flex-wrap">
                 <Button variant="outline" onClick={() => { setWaLead(null); onClose(); }}>Skip</Button>
-                <a
-                  href={buildWAUrl(waLead, isPayment ? 'payment_received' : 'welcome', extraVars)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => { setWaLead(null); onClose(); }}
-                  className="inline-flex items-center gap-2 rounded-md bg-[#25D366] px-4 py-2 text-sm font-semibold text-white hover:bg-[#128C7E] transition-colors"
+                <Button
+                  onClick={handleSendWA}
+                  className="inline-flex items-center gap-2 bg-[#25D366] hover:bg-[#128C7E] text-white"
                 >
                   <MessageCircle className="h-4 w-4" />
                   {isPayment ? 'Send Payment Receipt on WhatsApp' : 'Send Welcome on WhatsApp'}
-                </a>
+                </Button>
               </div>
             );
           })() : (

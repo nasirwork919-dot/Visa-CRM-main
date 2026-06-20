@@ -288,9 +288,13 @@ export default function LeadDetail() {
 
           <Card><CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground">Balance</p>
-            <p className={`text-lg font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-              {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
-            </p>
+            {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 ? (
+              <p className="text-lg font-bold font-mono text-amber-600">No fee set</p>
+            ) : (
+              <p className={`text-lg font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
+              </p>
+            )}
           </CardContent></Card>
         </div>
 
@@ -439,14 +443,28 @@ export default function LeadDetail() {
 
           {/* Payments Tab */}
           <TabsContent value="payments" className="mt-4 space-y-4">
+            {/* Warning: fee not set but payments exist */}
+            {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
+                <span className="font-bold mt-0.5">⚠</span>
+                <div>
+                  <p className="font-semibold">Total service fee is not set</p>
+                  <p className="text-xs mt-0.5">
+                    {formatINR(lead.amount_paid)} has been recorded but the lead has no fee defined — balance cannot be calculated.
+                    Edit this lead (Service / Payment tab) to set the total fee.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Payment summary */}
             <Card className="bg-muted/30">
               <CardContent className="pt-4 pb-4">
                 <div className="grid grid-cols-3 gap-4 text-sm">
                   <div>
                     <p className="text-xs text-muted-foreground">Total Fee</p>
-                    <p className="font-bold font-mono">{formatINR(service.totalAmount)}</p>
-                    {isUPI && (
+                    <p className="font-bold font-mono">{(lead.base_fee || 0) > 0 ? formatINR(service.totalAmount) : <span className="text-amber-600">—</span>}</p>
+                    {isUPI && (lead.base_fee || 0) > 0 && (
                       <p className="text-[10px] text-amber-700 mt-0.5">
                         incl. GST {formatINR(service.gstAmount)}
                       </p>
@@ -458,9 +476,13 @@ export default function LeadDetail() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Balance</p>
-                    <p className={`font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-                      {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
-                    </p>
+                    {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 ? (
+                      <p className="font-bold font-mono text-amber-600">No fee set</p>
+                    ) : (
+                      <p className={`font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                        {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
+                      </p>
+                    )}
                   </div>
                 </div>
               </CardContent>

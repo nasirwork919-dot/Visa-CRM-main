@@ -441,7 +441,9 @@ export default function LeadDetail() {
                 {payments && payments.length > 0 ? payments.map((p: any) => (
                   <div key={p.id} className="flex justify-between items-baseline gap-2 text-xs">
                     <span className="text-muted-foreground truncate">
-                      {p.note?.startsWith('Payment for ') ? p.note.replace('Payment for ', '') : (p.note || p.method || 'Payment')}
+                      {p.note?.startsWith('Payment for ')
+                        ? p.note.replace('Payment for ', '')
+                        : (p.note || new Date(p.payment_date || p.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }))}
                     </span>
                     <span className="font-mono shrink-0 text-green-600">{formatINR(p.amount)}</span>
                   </div>

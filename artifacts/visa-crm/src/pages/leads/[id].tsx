@@ -65,7 +65,7 @@ export default function LeadDetail() {
 
   const [noteText, setNoteText] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [payForm, setPayForm] = useState({ amount: '', method: 'Cash', note: '', payment_date: '' });
+  const [payForm, setPayForm] = useState({ amount: '', method: 'Cash', note: '', payment_date: '', service_tag: '' });
   const [paymentWA, setPaymentWA] = useState<{ url: string; amount: string } | null>(null);
   const [editPayment, setEditPayment] = useState<any>(null);
   const [editPayForm, setEditPayForm] = useState({ amount: '', method: 'Cash', note: '', payment_date: '' });
@@ -123,7 +123,7 @@ export default function LeadDetail() {
         received_by: profile?.id,
       });
       await updateLead.mutateAsync({ id: id!, updates: { amount_paid: newPaid } });
-      setPayForm({ amount: '', method: 'Cash', note: '', payment_date: '' });
+      setPayForm({ amount: '', method: 'Cash', note: '', payment_date: '', service_tag: '' });
 
       const now = new Date();
       const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -265,7 +265,26 @@ export default function LeadDetail() {
         toast({ title: 'Service added & payment recorded' });
         if (waUrl && waUrl !== '#') setPaymentWA({ url: waUrl, amount: formatINR(paidAmt) });
       } else {
-        toast({ title: 'Service added' });
+        // No payment, but still offer WA to send service booking confirmation
+        const now = new Date();
+        const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+        const { data: svcs } = await supabase.from('lead_services').select('*').eq('lead_id', id!);
+        const newTotalFee2 = svcs ? svcs.reduce((s: number, ls: any) => s + calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0) : fee;
+        const waLeadForSvc = { ...lead, base_fee: newTotalFee2 };
+        const waUrl2 = (lead.whatsapp || lead.phone)
+          ? buildWAUrl(waLeadForSvc, 'welcome', { date, time })
+          : null;
+        toast({
+          title: 'Service added',
+          description: waUrl2 && waUrl2 !== '#' ? 'Send booking confirmation on WhatsApp.' : undefined,
+          action: waUrl2 && waUrl2 !== '#' ? (
+            <a href={waUrl2} target="_blank" rel="noopener noreferrer"
+               className="inline-flex items-center gap-1 rounded-md border border-[#25D366] px-3 py-1.5 text-xs font-medium text-[#25D366] hover:bg-green-50 transition-colors">
+              <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+            </a>
+          ) : undefined,
+        });
       }
       setAddSvcForm({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '', amount_paid: '' });
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
@@ -399,40 +418,62 @@ export default function LeadDetail() {
           </div>
         </div>
 
-        {/* Finance Summary Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Card><CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground">Service Fee</p>
-            <p className="text-lg font-bold font-mono">{formatINR(totalFee)}</p>
-          </CardContent></Card>
-
-          <Card><CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground">
-              {isUPI ? `Total GST (${settings.serviceGSTRate + settings.bankGSTRate}%)` : 'GST'}
-            </p>
-            <p className="text-lg font-bold font-mono text-amber-700">{totalGST > 0 ? formatINR(totalGST) : '—'}</p>
-            {isUPI && (
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                Svc {formatINR(service.serviceGST)} + Bank {formatINR(service.bankGST)}
-              </p>
-            )}
-          </CardContent></Card>
-
-          <Card><CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground">Net Income</p>
-            <p className="text-lg font-bold font-mono text-green-700">{formatINR(totalNetFee)}</p>
-          </CardContent></Card>
-
-          <Card><CardContent className="pt-4 pb-4">
-            <p className="text-xs text-muted-foreground">Balance</p>
-            {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
-              <p className="text-lg font-bold font-mono text-amber-600">No fee set</p>
-            ) : (
-              <p className={`text-lg font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-                {balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓ Paid' : '—'}
-              </p>
-            )}
-          </CardContent></Card>
+        {/* Services & Finance Overview */}
+        <div className="space-y-2">
+          {svcBreakdown.map((ls: any, idx: number) => (
+            <div key={ls.id || idx} className="rounded-lg border bg-card px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold text-sm">{ls.service_name || 'Service'}</p>
+                  {ls.notes && <span className="text-xs text-muted-foreground">— {ls.notes}</span>}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {ls.payment_method}
+                  {ls.gstAmount > 0 ? ` · GST ${formatINR(ls.gstAmount)} · Net ${formatINR(ls.netFee)}` : ' · No GST'}
+                </p>
+              </div>
+              <div className="flex items-center gap-4 shrink-0">
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">Charges</p>
+                  <p className="text-lg font-bold font-mono">{formatINR(ls.totalAmount)}</p>
+                </div>
+                {can('leads_edit') && ls.id && (
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0"
+                      onClick={() => { setEditSvc(ls); setEditSvcForm({ service_name: ls.service_name || '', base_fee: String(ls.base_fee || ''), payment_method: ls.payment_method || 'Cash', notes: ls.notes || '', amount_paid: '' }); }}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                      onClick={() => handleDeleteService(ls.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {/* Summary bar */}
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 grid grid-cols-3 divide-x">
+            <div className="pr-4">
+              <p className="text-xs text-muted-foreground">Total Charges</p>
+              <p className="text-2xl font-bold font-mono">{totalFee > 0 ? formatINR(totalFee) : '—'}</p>
+              {totalGST > 0 && <p className="text-xs text-amber-700 mt-0.5">incl. GST {formatINR(totalGST)}</p>}
+            </div>
+            <div className="px-4">
+              <p className="text-xs text-muted-foreground">Paid</p>
+              <p className="text-2xl font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
+            </div>
+            <div className="pl-4">
+              <p className="text-xs text-muted-foreground">Balance</p>
+              {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
+                <p className="text-2xl font-bold font-mono text-amber-600">No fee</p>
+              ) : (
+                <p className={`text-2xl font-bold font-mono ${balance > 0 ? 'text-destructive' : totalFee > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                  {balance > 0 ? formatINR(balance) : totalFee > 0 ? '✓ Paid' : '—'}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -485,39 +526,6 @@ export default function LeadDetail() {
                   )}
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2 text-sm">
-                    {svcBreakdown.map((ls: any, idx: number) => (
-                      <div key={ls.id || idx} className="flex items-start justify-between gap-2 py-2 border-b last:border-0">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{ls.service_name || 'Service'}</p>
-                          <p className="text-xs text-muted-foreground">{ls.payment_method}{ls.gstAmount > 0 ? ` · GST ${formatINR(ls.gstAmount)} · Net ${formatINR(ls.netFee)}` : ' · No GST'}</p>
-                          {ls.notes && <p className="text-xs text-muted-foreground italic">{ls.notes}</p>}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="font-bold font-mono">{formatINR(ls.totalAmount)}</span>
-                          {can('leads_edit') && ls.id && (
-                            <>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0"
-                                onClick={() => { setEditSvc(ls); setEditSvcForm({ service_name: ls.service_name || '', base_fee: String(ls.base_fee || ''), payment_method: ls.payment_method || 'Cash', notes: ls.notes || '', amount_paid: '' }); }}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive"
-                                onClick={() => handleDeleteService(ls.id)}>
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {svcBreakdown.length > 1 && (
-                      <div className="flex justify-between font-bold pt-1">
-                        <span>Grand Total</span>
-                        <span className="font-mono">{formatINR(totalFee)}</span>
-                      </div>
-                    )}
-                  </div>
-
                   {can('leads_edit') && (
                     <div className="mt-4 pt-4 border-t space-y-2">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Add Service</p>
@@ -676,30 +684,7 @@ export default function LeadDetail() {
                 <span className="font-bold mt-0.5">⚠</span>
                 <p>Total service fee not set. Ask an admin to edit this lead and add the fee.</p>
               </div>
-            ) : (
-              /* Normal summary when fee is set */
-              <Card className="bg-muted/30">
-                <CardContent className="pt-4 pb-4">
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Total Fee</p>
-                      <p className="font-bold font-mono">{formatINR(service.totalAmount)}</p>
-                      {isUPI && <p className="text-[10px] text-amber-700 mt-0.5">incl. GST {formatINR(service.gstAmount)}</p>}
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Paid</p>
-                      <p className="font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Balance</p>
-                      <p className={`font-bold font-mono ${balance > 0 ? 'text-destructive' : 'text-green-600'}`}>
-                        {balance > 0 ? formatINR(balance) : '✓ Paid'}
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            ) : null}
 
             {can('pay_record') && totalFee > 0 && balance === 0 && (
               <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-center gap-2">
@@ -735,6 +720,26 @@ export default function LeadDetail() {
                         onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))} />
                     </div>
                   )}
+                  {leadServices && leadServices.length > 1 && (
+                    <div className={payForm.method === 'Cash' ? '' : 'col-span-2'}>
+                      <Label>For Service</Label>
+                      <Select value={payForm.service_tag} onValueChange={v => setPayForm(f => ({
+                        ...f,
+                        service_tag: v,
+                        note: v && v !== '__all__' ? `Payment for ${v}` : f.note,
+                      }))}>
+                        <SelectTrigger className="mt-1"><SelectValue placeholder="All services" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">— All services</SelectItem>
+                          {leadServices.map((ls: any) => (
+                            <SelectItem key={ls.id} value={ls.service_name || ls.id}>
+                              {ls.service_name || 'Unnamed'} · {formatINR(ls.base_fee || 0)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className={payForm.method === 'Cash' ? '' : 'col-span-2'}>
                     <Label>Note (optional)</Label>
                     <Input placeholder="e.g., advance, final payment..." value={payForm.note}
@@ -764,22 +769,33 @@ export default function LeadDetail() {
               {payments?.length === 0 && <p className="text-muted-foreground text-sm text-center py-6">No payments recorded.</p>}
               {payments?.map((p: any) => (
                 <Card key={p.id}>
-                  <CardContent className="pt-3 pb-3 flex items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold font-mono">{formatINR(p.amount)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {p.method}{p.payment_date ? ` · ${p.payment_date}` : ''}{p.note ? ` · ${p.note}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <p className="text-xs text-muted-foreground">{new Date(p.created_at).toLocaleString('en-IN')}</p>
+                  <CardContent className="pt-3 pb-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <p className="text-lg font-bold font-mono">{formatINR(p.amount)}</p>
+                          <span className="text-xs rounded-full bg-muted px-2 py-0.5 text-muted-foreground font-medium">{p.method || 'Cash'}</span>
+                          {p.note && p.note.startsWith('Payment for ') && (
+                            <span className="text-xs rounded-full bg-blue-50 border border-blue-100 px-2 py-0.5 text-blue-700 font-medium truncate max-w-[200px]">
+                              {p.note.replace('Payment for ', '')}
+                            </span>
+                          )}
+                        </div>
+                        {p.note && !p.note.startsWith('Payment for ') && (
+                          <p className="text-xs text-muted-foreground mt-0.5">{p.note}</p>
+                        )}
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {p.payment_date
+                            ? new Date(p.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                            : new Date(p.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
                       {can('pay_record') && (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground"
-                          onClick={() => {
-                            setEditPayment(p);
-                            setEditPayForm({ amount: String(p.amount), method: p.method || 'Cash', note: p.note || '', payment_date: p.payment_date || '' });
-                          }}>
-                          <Pencil className="h-3.5 w-3.5" />
+                        <Button variant="ghost" size="icon" className="shrink-0" onClick={() => {
+                          setEditPayment(p);
+                          setEditPayForm({ amount: String(p.amount), method: p.method || 'Cash', note: p.note || '', payment_date: p.payment_date || '' });
+                        }}>
+                          <Pencil className="h-4 w-4" />
                         </Button>
                       )}
                     </div>

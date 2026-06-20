@@ -420,6 +420,58 @@ export default function LeadDetail() {
 
         {/* Services & Finance Overview */}
         <div className="space-y-2">
+          {/* Summary bar — with mini service/payment lists */}
+          <div className="rounded-lg border bg-muted/30 px-4 py-3 grid grid-cols-3 divide-x">
+            <div className="pr-4">
+              <p className="text-xs text-muted-foreground mb-1">Total Charges</p>
+              <div className="space-y-0.5 mb-2">
+                {svcBreakdown.map((ls: any, idx: number) => (
+                  <div key={ls.id || idx} className="flex justify-between items-baseline gap-2 text-xs">
+                    <span className="text-muted-foreground truncate">{ls.service_name || 'Service'}</span>
+                    <span className="font-mono shrink-0">{formatINR(ls.totalAmount)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-2xl font-bold font-mono">{totalFee > 0 ? formatINR(totalFee) : '—'}</p>
+              {totalGST > 0 && <p className="text-xs text-amber-700 mt-0.5">incl. GST {formatINR(totalGST)}</p>}
+            </div>
+            <div className="px-4">
+              <p className="text-xs text-muted-foreground mb-1">Paid</p>
+              <div className="space-y-0.5 mb-2">
+                {payments && payments.length > 0 ? payments.map((p: any) => (
+                  <div key={p.id} className="flex justify-between items-baseline gap-2 text-xs">
+                    <span className="text-muted-foreground truncate">
+                      {p.note?.startsWith('Payment for ') ? p.note.replace('Payment for ', '') : (p.note || p.method || 'Payment')}
+                    </span>
+                    <span className="font-mono shrink-0 text-green-600">{formatINR(p.amount)}</span>
+                  </div>
+                )) : (
+                  <p className="text-xs text-muted-foreground">No payments yet</p>
+                )}
+              </div>
+              <p className="text-2xl font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
+            </div>
+            <div className="pl-4">
+              <p className="text-xs text-muted-foreground mb-1">Balance</p>
+              <div className="space-y-0.5 mb-2">
+                {svcBreakdown.map((ls: any, idx: number) => (
+                  <div key={ls.id || idx} className="flex justify-between items-baseline gap-2 text-xs">
+                    <span className="text-muted-foreground truncate">{ls.service_name || 'Service'}</span>
+                    <span className="font-mono shrink-0">{formatINR(ls.totalAmount)}</span>
+                  </div>
+                ))}
+              </div>
+              {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
+                <p className="text-2xl font-bold font-mono text-amber-600">No fee</p>
+              ) : (
+                <p className={`text-2xl font-bold font-mono ${balance > 0 ? 'text-destructive' : totalFee > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
+                  {balance > 0 ? formatINR(balance) : totalFee > 0 ? '✓ Paid' : '—'}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Service cards — moved below summary */}
           {svcBreakdown.map((ls: any, idx: number) => (
             <div key={ls.id || idx} className="rounded-lg border bg-card px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
               <div className="flex-1 min-w-0">
@@ -452,28 +504,6 @@ export default function LeadDetail() {
               </div>
             </div>
           ))}
-          {/* Summary bar */}
-          <div className="rounded-lg border bg-muted/30 px-4 py-3 grid grid-cols-3 divide-x">
-            <div className="pr-4">
-              <p className="text-xs text-muted-foreground">Total Charges</p>
-              <p className="text-2xl font-bold font-mono">{totalFee > 0 ? formatINR(totalFee) : '—'}</p>
-              {totalGST > 0 && <p className="text-xs text-amber-700 mt-0.5">incl. GST {formatINR(totalGST)}</p>}
-            </div>
-            <div className="px-4">
-              <p className="text-xs text-muted-foreground">Paid</p>
-              <p className="text-2xl font-bold font-mono text-green-600">{formatINR(lead.amount_paid || 0)}</p>
-            </div>
-            <div className="pl-4">
-              <p className="text-xs text-muted-foreground">Balance</p>
-              {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
-                <p className="text-2xl font-bold font-mono text-amber-600">No fee</p>
-              ) : (
-                <p className={`text-2xl font-bold font-mono ${balance > 0 ? 'text-destructive' : totalFee > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-                  {balance > 0 ? formatINR(balance) : totalFee > 0 ? '✓ Paid' : '—'}
-                </p>
-              )}
-            </div>
-          </div>
         </div>
 
         {/* Tabs */}

@@ -241,7 +241,7 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
           setTimeout(() => openWhatsApp({ ...lead, ...payload }, 'status_update'), 300);
         }
         if (paymentChanged && (payload.whatsapp || payload.phone)) {
-          setWaLead({ ...lead, ...payload, __waType: 'payment' });
+          setWaLead({ ...lead, ...payload, __waType: 'payment', __prevPaid: lead.amount_paid || 0 });
           // stay open for WA button
         } else {
           onClose();
@@ -603,8 +603,11 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
           {waLead ? (() => {
             const isPayment = waLead.__waType === 'payment';
             const now = new Date();
+            const paymentDelta = isPayment
+              ? Math.max(0, Number(waLead.amount_paid || 0) - Number(waLead.__prevPaid || 0))
+              : 0;
             const extraVars = isPayment ? {
-              this_payment: formatINR(Number(waLead.amount_paid) || 0),
+              this_payment: formatINR(paymentDelta > 0 ? paymentDelta : Number(waLead.amount_paid || 0)),
               date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
               time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
             } : undefined;

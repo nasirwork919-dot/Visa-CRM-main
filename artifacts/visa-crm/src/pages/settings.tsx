@@ -17,7 +17,7 @@ import {
   ImageIcon, Upload, X, Palette, Check, Pipette,
 } from 'lucide-react';
 
-const TEMPLATE_VARS = ['{name}', '{service}', '{fee}', '{gst}', '{net}', '{paid}', '{balance}'];
+const TEMPLATE_VARS = ['{name}', '{service}', '{fee}', '{gst}', '{net}', '{paid}', '{balance}', '{this_payment}', '{date}', '{time}'];
 
 const MESSAGE_CONFIGS: { key: keyof MessageTemplates; label: string; when: string }[] = [
   { key: 'welcome',          label: 'Welcome',          when: 'When a new lead is created' },
@@ -146,8 +146,8 @@ export default function SettingsPage() {
     saveSettings({
       waNumber: form.waNumber.trim(),
       businessName: form.businessName.trim(),
-      serviceGSTRate: Number(form.serviceGSTRate) || 18,
-      bankGSTRate: Number(form.bankGSTRate) || 18,
+      serviceGSTRate: form.serviceGSTRate !== '' ? Number(form.serviceGSTRate) : 18,
+      bankGSTRate: form.bankGSTRate !== '' ? Number(form.bankGSTRate) : 18,
       messages,
       logoUrl,
       colorTheme,
@@ -157,8 +157,8 @@ export default function SettingsPage() {
     toast({ title: 'Settings saved', description: 'All preferences have been updated.' });
   };
 
-  const sR = Number(form.serviceGSTRate || 18);
-  const bR = Number(form.bankGSTRate || 18);
+  const sR = form.serviceGSTRate !== '' ? Number(form.serviceGSTRate) : 18;
+  const bR = form.bankGSTRate !== '' ? Number(form.bankGSTRate) : 18;
 
   const lightThemes = FULL_THEMES.filter(t => !t.dark);
   const darkThemes = FULL_THEMES.filter(t => t.dark);

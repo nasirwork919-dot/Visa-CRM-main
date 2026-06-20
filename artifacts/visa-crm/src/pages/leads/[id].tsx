@@ -91,6 +91,15 @@ export default function LeadDetail() {
   const totalNetFee = svcBreakdown.reduce((s: number, ls: any) => s + ls.netFee, 0);
   const balance = Math.max(0, totalFee - (lead.amount_paid || 0));
   const isUPI = lead.payment_method === 'UPI/Transfer';
+
+  // Per-service paid amounts from tagged payments
+  const servicePaidMap: Record<string, number> = {};
+  payments?.forEach((p: any) => {
+    if (p.note?.startsWith('Payment for ')) {
+      const svcName = p.note.replace('Payment for ', '');
+      servicePaidMap[svcName] = (servicePaidMap[svcName] || 0) + p.amount;
+    }
+  });
   const service = calcGST(lead.base_fee || 0, lead.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
 
   const handleAddNote = async () => {
@@ -456,12 +465,18 @@ export default function LeadDetail() {
             <div className="pl-4">
               <p className="text-xs text-muted-foreground mb-1">Balance</p>
               <div className="space-y-0.5 mb-2">
-                {svcBreakdown.map((ls: any, idx: number) => (
-                  <div key={ls.id || idx} className="flex justify-between items-baseline gap-2 text-xs">
-                    <span className="text-muted-foreground truncate">{ls.service_name || 'Service'}</span>
-                    <span className="font-mono shrink-0">{formatINR(ls.totalAmount)}</span>
-                  </div>
-                ))}
+                {svcBreakdown.map((ls: any, idx: number) => {
+                  const svcPaid = servicePaidMap[ls.service_name] || 0;
+                  const svcBalance = Math.max(0, ls.totalAmount - svcPaid);
+                  return (
+                    <div key={ls.id || idx} className="flex justify-between items-baseline gap-2 text-xs">
+                      <span className="text-muted-foreground truncate">{ls.service_name || 'Service'}</span>
+                      <span className={`font-mono shrink-0 ${svcBalance > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                        {svcBalance > 0 ? formatINR(svcBalance) : '✓'}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
                 <p className="text-2xl font-bold font-mono text-amber-600">No fee</p>

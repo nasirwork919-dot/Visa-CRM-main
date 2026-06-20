@@ -4,6 +4,7 @@ import { SidebarLayout } from '@/components/layout/SidebarLayout';
 import {
   useLead, useLeadNotes, useLeadPayments, useLeadDocuments, useLeadHistory,
   useCreateLeadNote, useCreateLeadPayment, useUpdateLeadPayment, useUpdateLead, useDeleteLead,
+  useLeadServices, useCreateLeadService, useUpdateLeadService, useDeleteLeadService,
 } from '@/hooks/use-leads';
 import { useAuth } from '@/context/AuthContext';
 import { LeadStatusBadge } from '@/components/ui/status-badge';
@@ -52,6 +53,11 @@ export default function LeadDetail() {
   const { data: documents } = useLeadDocuments(id || '');
   const { data: history } = useLeadHistory(id || '');
 
+  const { data: leadServices } = useLeadServices(id || '');
+  const createSvc = useCreateLeadService();
+  const updateSvc = useUpdateLeadService();
+  const deleteSvc = useDeleteLeadService();
+
   const createNote = useCreateLeadNote();
   const createPayment = useCreateLeadPayment();
   const updateLead = useUpdateLead();
@@ -66,6 +72,9 @@ export default function LeadDetail() {
   const updatePayment = useUpdateLeadPayment();
   const [uploading, setUploading] = useState(false);
   const [newStatus, setNewStatus] = useState('');
+  const [addSvcForm, setAddSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
+  const [editSvc, setEditSvc] = useState<any>(null);
+  const [editSvcForm, setEditSvcForm] = useState({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
   const [setupTotal, setSetupTotal] = useState('');
   const [setupPaid, setSetupPaid] = useState('');
   const { settings } = useSettings();
@@ -73,9 +82,16 @@ export default function LeadDetail() {
   if (isLoading) return <SidebarLayout><div className="flex items-center justify-center h-64">Loading...</div></SidebarLayout>;
   if (!lead) return <SidebarLayout><div className="p-8 text-muted-foreground">Lead not found.</div></SidebarLayout>;
 
+  const hasServices = leadServices && leadServices.length > 0;
+  const svcBreakdown = hasServices
+    ? leadServices!.map((ls: any) => ({ ...ls, ...calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate) }))
+    : [{ ...lead, ...calcGST(lead.base_fee || 0, lead.payment_method, settings.serviceGSTRate, settings.bankGSTRate), service_name: lead.service_name || '' }];
+  const totalFee = svcBreakdown.reduce((s: number, ls: any) => s + ls.totalAmount, 0);
+  const totalGST = svcBreakdown.reduce((s: number, ls: any) => s + ls.gstAmount, 0);
+  const totalNetFee = svcBreakdown.reduce((s: number, ls: any) => s + ls.netFee, 0);
+  const balance = Math.max(0, totalFee - (lead.amount_paid || 0));
   const isUPI = lead.payment_method === 'UPI/Transfer';
   const service = calcGST(lead.base_fee || 0, lead.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
-  const balance = Math.max(0, service.totalAmount - (lead.amount_paid || 0));
 
   const handleAddNote = async () => {
     if (!noteText.trim()) return;
@@ -112,7 +128,7 @@ export default function LeadDetail() {
       const now = new Date();
       const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
       const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const updatedLead = { ...lead, amount_paid: newPaid };
+      const updatedLead = { ...lead, amount_paid: newPaid, base_fee: totalFee };
       const waUrl = (lead.whatsapp || lead.phone)
         ? buildWAUrl(updatedLead, 'payment_received', { this_payment: formatINR(amount), date, time })
         : null;
@@ -142,7 +158,7 @@ export default function LeadDetail() {
       const now = new Date();
       const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
       const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const updatedLead = { ...lead, amount_paid: newLeadPaid };
+      const updatedLead = { ...lead, amount_paid: newLeadPaid, base_fee: totalFee };
       const waUrl = (lead.whatsapp || lead.phone)
         ? buildWAUrl(updatedLead, 'payment_received', { this_payment: formatINR(newAmount), date, time })
         : null;
@@ -196,12 +212,55 @@ export default function LeadDetail() {
           total_amount: svc.totalAmount,
         },
       });
+      // Also create a lead_services record so it shows in the breakdown
+      await supabase.from('lead_services').delete().eq('lead_id', id!);
+      await supabase.from('lead_services').insert({ lead_id: id!, service_name: lead.service_name || 'Service', base_fee: total, payment_method: lead.payment_method || 'Cash', notes: null });
       toast({ title: 'Service fee saved' });
       setSetupTotal('');
       setSetupPaid('');
     } catch (e: any) {
       toast({ title: 'Error', description: e.message, variant: 'destructive' });
     }
+  };
+
+  const syncLeadTotals = async (leadId: string) => {
+    const { data: svcs } = await supabase.from('lead_services').select('*').eq('lead_id', leadId);
+    if (!svcs || svcs.length === 0) return;
+    const totals = svcs.map((ls: any) => calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate));
+    const totalBase = svcs.reduce((s: number, ls: any) => s + (ls.base_fee || 0), 0);
+    const totalGstAmt = totals.reduce((s: number, t: any) => s + t.gstAmount, 0);
+    const totalAmt = totals.reduce((s: number, t: any) => s + t.totalAmount, 0);
+    const combinedName = svcs.filter((s: any) => s.service_name).map((s: any) => s.service_name).join(' + ');
+    await updateLead.mutateAsync({ id: leadId, updates: { base_fee: totalBase, gst_amount: totalGstAmt, total_amount: totalAmt, service_name: combinedName } });
+  };
+
+  const handleAddService = async () => {
+    const fee = Number(addSvcForm.base_fee) || 0;
+    if (!addSvcForm.service_name && !fee) { toast({ title: 'Enter service name or fee', variant: 'destructive' }); return; }
+    try {
+      await createSvc.mutateAsync({ lead_id: id!, service_name: addSvcForm.service_name, base_fee: fee, payment_method: addSvcForm.payment_method, notes: addSvcForm.notes || null });
+      await syncLeadTotals(id!);
+      setAddSvcForm({ service_name: '', base_fee: '', payment_method: 'Cash', notes: '' });
+      toast({ title: 'Service added' });
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
+  };
+
+  const handleUpdateService = async () => {
+    if (!editSvc) return;
+    try {
+      await updateSvc.mutateAsync({ id: editSvc.id, updates: { service_name: editSvcForm.service_name, base_fee: Number(editSvcForm.base_fee) || 0, payment_method: editSvcForm.payment_method, notes: editSvcForm.notes || null } });
+      await syncLeadTotals(id!);
+      setEditSvc(null);
+      toast({ title: 'Service updated' });
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
+  };
+
+  const handleDeleteService = async (svcId: string) => {
+    try {
+      await deleteSvc.mutateAsync({ id: svcId, leadId: id! });
+      await syncLeadTotals(id!);
+      toast({ title: 'Service removed' });
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
 
   const handleDelete = async () => {
@@ -292,14 +351,14 @@ export default function LeadDetail() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Card><CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground">Service Fee</p>
-            <p className="text-lg font-bold font-mono">{formatINR(lead.base_fee || 0)}</p>
+            <p className="text-lg font-bold font-mono">{formatINR(totalFee)}</p>
           </CardContent></Card>
 
           <Card><CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground">
               {isUPI ? `Total GST (${settings.serviceGSTRate + settings.bankGSTRate}%)` : 'GST'}
             </p>
-            <p className="text-lg font-bold font-mono text-amber-700">{isUPI ? formatINR(service.totalGST) : '—'}</p>
+            <p className="text-lg font-bold font-mono text-amber-700">{totalGST > 0 ? formatINR(totalGST) : '—'}</p>
             {isUPI && (
               <p className="text-[10px] text-muted-foreground mt-0.5">
                 Svc {formatINR(service.serviceGST)} + Bank {formatINR(service.bankGST)}
@@ -309,12 +368,12 @@ export default function LeadDetail() {
 
           <Card><CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground">Net Income</p>
-            <p className="text-lg font-bold font-mono text-green-700">{formatINR(service.netFee)}</p>
+            <p className="text-lg font-bold font-mono text-green-700">{formatINR(totalNetFee)}</p>
           </CardContent></Card>
 
           <Card><CardContent className="pt-4 pb-4">
             <p className="text-xs text-muted-foreground">Balance</p>
-            {(lead.base_fee || 0) === 0 && (lead.amount_paid || 0) > 0 ? (
+            {totalFee === 0 && (lead.amount_paid || 0) > 0 ? (
               <p className="text-lg font-bold font-mono text-amber-600">No fee set</p>
             ) : (
               <p className={`text-lg font-bold font-mono ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
@@ -374,45 +433,73 @@ export default function LeadDetail() {
                   )}
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-1.5 text-sm max-w-sm">
-                    <div className="flex justify-between font-semibold">
-                      <span>Service Fee (client pays)</span>
-                      <span className="font-mono">{formatINR(lead.base_fee || 0)}</span>
-                    </div>
-                    {isUPI ? (
-                    <>
-                      <div className="flex justify-between text-xs text-amber-700 pl-4">
-                        <span>↳ Service GST ({settings.serviceGSTRate}%)</span>
-                        <span className="font-mono">― {formatINR(service.serviceGST)}</span>
+                  <div className="space-y-2 text-sm">
+                    {svcBreakdown.map((ls: any, idx: number) => (
+                      <div key={ls.id || idx} className="flex items-start justify-between gap-2 py-2 border-b last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{ls.service_name || 'Service'}</p>
+                          <p className="text-xs text-muted-foreground">{ls.payment_method}{ls.gstAmount > 0 ? ` · GST ${formatINR(ls.gstAmount)} · Net ${formatINR(ls.netFee)}` : ' · No GST'}</p>
+                          {ls.notes && <p className="text-xs text-muted-foreground italic">{ls.notes}</p>}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-bold font-mono">{formatINR(ls.totalAmount)}</span>
+                          {can('leads_edit') && ls.id && (
+                            <>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0"
+                                onClick={() => { setEditSvc(ls); setEditSvcForm({ service_name: ls.service_name || '', base_fee: String(ls.base_fee || ''), payment_method: ls.payment_method || 'Cash', notes: ls.notes || '' }); }}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive"
+                                onClick={() => handleDeleteService(ls.id)}>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex justify-between text-xs text-blue-700 pl-4">
-                        <span>↳ Bank GST ({settings.bankGSTRate}%)</span>
-                        <span className="font-mono">― {formatINR(service.bankGST)}</span>
+                    ))}
+                    {svcBreakdown.length > 1 && (
+                      <div className="flex justify-between font-bold pt-1">
+                        <span>Grand Total</span>
+                        <span className="font-mono">{formatINR(totalFee)}</span>
                       </div>
-                    </>
-                  ) : (
-                    <div className="flex justify-between text-xs text-muted-foreground pl-4">
-                      <span>GST</span>
-                      <span className="font-mono">— (not applicable)</span>
+                    )}
+                  </div>
+
+                  {can('leads_edit') && (
+                    <div className="mt-4 pt-4 border-t space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Add Service</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Service Name</Label>
+                          <Input className="mt-1 h-8 text-sm" placeholder="e.g. UAE Visa" value={addSvcForm.service_name}
+                            onChange={e => setAddSvcForm(f => ({ ...f, service_name: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Fee (₹)</Label>
+                          <Input className="mt-1 h-8 text-sm" type="number" placeholder="0" value={addSvcForm.base_fee}
+                            onChange={e => setAddSvcForm(f => ({ ...f, base_fee: e.target.value }))} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Method</Label>
+                          <Select value={addSvcForm.payment_method} onValueChange={v => setAddSvcForm(f => ({ ...f, payment_method: v }))}>
+                            <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {PAYMENT_METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Notes (optional)</Label>
+                          <Input className="mt-1 h-8 text-sm" placeholder="e.g. EK521" value={addSvcForm.notes}
+                            onChange={e => setAddSvcForm(f => ({ ...f, notes: e.target.value }))} />
+                        </div>
+                      </div>
+                      <Button size="sm" onClick={handleAddService} disabled={createSvc.isPending || updateLead.isPending}>
+                        {createSvc.isPending ? 'Adding…' : '+ Add Service'}
+                      </Button>
                     </div>
                   )}
-                    <div className="flex justify-between text-xs pl-4 text-muted-foreground border-t pt-1.5">
-                      <span>Total GST deducted</span>
-                      <span className="font-mono">― {formatINR(service.totalGST)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs pl-4 font-medium text-green-700">
-                      <span>Your net income</span>
-                      <span className="font-mono">{formatINR(service.netFee)}</span>
-                    </div>
-                    <div className="flex justify-between border-t pt-2 mt-1">
-                      <span className="text-muted-foreground">Amount Paid</span>
-                      <span className="font-mono">{formatINR(lead.amount_paid || 0)}</span>
-                    </div>
-                    <div className={`flex justify-between font-bold border-t pt-2 ${balance > 0 ? 'text-destructive' : (lead.total_amount || 0) > 0 ? 'text-green-600' : 'text-muted-foreground'}`}>
-                      <span>{balance > 0 ? 'Balance Due' : (lead.total_amount || 0) > 0 ? 'Fully Paid' : 'No fee set'}</span>
-                      <span className="font-mono">{balance > 0 ? formatINR(balance) : (lead.total_amount || 0) > 0 ? '✓' : '—'}</span>
-                    </div>
-                  </div>
                 </CardContent>
               </Card>
 
@@ -470,7 +557,7 @@ export default function LeadDetail() {
           {/* Payments Tab */}
           <TabsContent value="payments" className="mt-4 space-y-4">
             {/* Fee setup — shown only when no fee was set during lead creation */}
-            {(lead.base_fee || 0) === 0 && can('leads_edit') ? (
+            {totalFee === 0 && can('leads_edit') ? (
               <Card className="border-amber-200 bg-amber-50/40">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base text-amber-800">Set Service Fee</CardTitle>
@@ -526,7 +613,7 @@ export default function LeadDetail() {
                   </Button>
                 </CardContent>
               </Card>
-            ) : (lead.base_fee || 0) === 0 ? (
+            ) : totalFee === 0 ? (
               /* No edit permission + no fee set */
               <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
                 <span className="font-bold mt-0.5">⚠</span>
@@ -557,14 +644,14 @@ export default function LeadDetail() {
               </Card>
             )}
 
-            {can('pay_record') && (lead.base_fee || 0) > 0 && balance === 0 && (
+            {can('pay_record') && totalFee > 0 && balance === 0 && (
               <div className="rounded-md border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 flex items-center gap-2">
                 <span className="text-green-600 font-bold">✓</span>
                 <p>This lead is <strong>fully paid</strong>. No further payment is required.</p>
               </div>
             )}
 
-            {can('pay_record') && !((lead.base_fee || 0) > 0 && balance === 0) && (
+            {can('pay_record') && !(totalFee > 0 && balance === 0) && (
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Record Payment</CardTitle>
@@ -740,6 +827,44 @@ export default function LeadDetail() {
             <Button variant="outline" onClick={() => setEditPayment(null)}>Cancel</Button>
             <Button onClick={handleUpdatePayment} disabled={updatePayment.isPending || updateLead.isPending}>
               {updatePayment.isPending ? 'Saving…' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit service dialog */}
+      <Dialog open={!!editSvc} onOpenChange={open => { if (!open) setEditSvc(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit Service</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Service Name</Label>
+              <Input className="mt-1" value={editSvcForm.service_name} onChange={e => setEditSvcForm(f => ({ ...f, service_name: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Fee (₹)</Label>
+              <Input className="mt-1" type="number" value={editSvcForm.base_fee} onChange={e => setEditSvcForm(f => ({ ...f, base_fee: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Method</Label>
+              <Select value={editSvcForm.payment_method} onValueChange={v => setEditSvcForm(f => ({ ...f, payment_method: v }))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Notes (optional)</Label>
+              <Input className="mt-1" value={editSvcForm.notes} onChange={e => setEditSvcForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditSvc(null)}>Cancel</Button>
+            <Button onClick={handleUpdateService} disabled={updateSvc.isPending || updateLead.isPending}>
+              {updateSvc.isPending ? 'Saving…' : 'Save'}
             </Button>
           </DialogFooter>
         </DialogContent>

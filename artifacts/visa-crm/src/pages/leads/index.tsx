@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
-import { useLeads, useCreateLead, useUpdateLead, useLeadDocuments, useDeleteLead, useBulkDeleteLeads } from '@/hooks/use-leads';
+import { useLeads, useCreateLead, useUpdateLead, useLeadDocuments, useDeleteLead, useBulkDeleteLeads, useLeadServices } from '@/hooks/use-leads';
 import { useServices } from '@/hooks/use-services';
 import { useProfiles } from '@/hooks/use-team';
 import { useAuth } from '@/context/AuthContext';
@@ -47,12 +47,27 @@ function parsePhone(raw: string) {
   return { code: '+91', number: digits };
 }
 
+type ServiceItem = {
+  _key: string;
+  id?: string;
+  service_id: string;
+  service_name: string;
+  base_fee: string;
+  payment_method: string;
+  notes: string;
+};
+function mkSvcItem(overrides?: Partial<ServiceItem>): ServiceItem {
+  return { _key: Math.random().toString(36).slice(2), id: undefined, service_id: '', service_name: '', base_fee: '', payment_method: 'Cash', notes: '', ...overrides };
+}
+
 function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => void; lead?: any }) {
   const { profile, can } = useAuth();
   const { settings } = useSettings();
   const { data: services } = useServices();
   const { data: agents } = useProfiles();
   const { data: existingDocs } = useLeadDocuments(lead?.id || '');
+  const { data: existingServices } = useLeadServices(lead?.id || '');
+  const [serviceItems, setServiceItems] = useState<ServiceItem[]>([mkSvcItem()]);
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
   const { toast } = useToast();
@@ -125,6 +140,23 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
     setForm(blankForm());
   }, [lead?.id, open]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (isEdit && existingServices && existingServices.length > 0) {
+      setServiceItems(existingServices.map((s: any) => mkSvcItem({
+        _key: s.id,
+        id: s.id,
+        service_id: s.service_id || '',
+        service_name: s.service_name || '',
+        base_fee: String(s.base_fee || ''),
+        payment_method: s.payment_method || 'Cash',
+        notes: s.notes || '',
+      })));
+    } else if (!isEdit && open) {
+      setServiceItems([mkSvcItem()]);
+    }
+  }, [open, isEdit, existingServices?.length]);
+
   const baseFee = Number(form.base_fee) || 0;
   const isUPI = form.payment_method === 'UPI/Transfer';
   const service = calcGST(baseFee, form.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
@@ -137,11 +169,13 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
     if (id === '__other__') {
       set('service_id', '__other__');
       set('service_name', '');
+      setServiceItems(prev => prev.map((s, i) => i === 0 ? { ...s, service_id: '__other__', service_name: '' } : s));
     } else {
       const svc = services?.find(s => s.id === id);
       set('service_id', id);
       set('service_name', svc?.name || '');
       if (svc?.country) set('destination', svc.country);
+      setServiceItems(prev => prev.map((s, i) => i === 0 ? { ...s, service_id: id, service_name: svc?.name || '' } : s));
     }
   };
 
@@ -215,16 +249,25 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
       const fullWA = sameWA ? fullPhone
         : altAsWA && fullAltPhone ? fullAltPhone
         : form.whatsapp ? `${waCountryCode} ${form.whatsapp}` : fullPhone;
+      const svcTotals = serviceItems.map(s => calcGST(Number(s.base_fee)||0, s.payment_method, settings.serviceGSTRate, settings.bankGSTRate));
+      const totalBaseFee = serviceItems.reduce((sum, s) => sum + (Number(s.base_fee)||0), 0);
+      const totalGSTAmt = svcTotals.reduce((sum, s) => sum + s.gstAmount, 0);
+      const totalAmountCalc = svcTotals.reduce((sum, s) => sum + s.totalAmount, 0);
+      const primaryMethod = serviceItems[0]?.payment_method || 'Cash';
+      const combinedServiceName = serviceItems.filter(s => s.service_name).map(s => s.service_name).join(' + ') || '';
+      const primaryServiceId = serviceItems[0]?.service_id && serviceItems[0].service_id !== '__other__' ? serviceItems[0].service_id : null;
       const payload = {
         ...form,
         phone: fullPhone,
         whatsapp: fullWA,
         alt_phone: fullAltPhone,
-        service_id: form.service_id === '__other__' ? null : form.service_id || null,
-        base_fee: baseFee,
+        service_id: primaryServiceId,
+        service_name: combinedServiceName,
+        payment_method: primaryMethod,
+        base_fee: totalBaseFee,
         amount_paid: Number(form.amount_paid) || 0,
-        gst_amount: service.gstAmount,
-        total_amount: grandTotal,
+        gst_amount: totalGSTAmt,
+        total_amount: totalAmountCalc,
         pax_count: Number(form.pax_count) || 1,
         dob: nullDate(form.dob),
         travel_date: nullDate(form.travel_date),
@@ -236,6 +279,22 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
         const paymentChanged = Number(payload.base_fee) !== Number(lead.base_fee) || Number(payload.amount_paid) !== Number(lead.amount_paid);
         await updateLead.mutateAsync({ id: lead.id, updates: payload, logStatus: statusChanged });
         if (pendingFiles.length > 0 && leadId) await uploadPendingDocs(leadId);
+        // Sync service items
+        if (leadId) {
+          await supabase.from('lead_services').delete().eq('lead_id', leadId);
+          for (const item of serviceItems) {
+            if (item.service_name || Number(item.base_fee) > 0) {
+              await supabase.from('lead_services').insert({
+                lead_id: leadId,
+                service_id: item.service_id && item.service_id !== '__other__' ? item.service_id : null,
+                service_name: item.service_name,
+                base_fee: Number(item.base_fee) || 0,
+                payment_method: item.payment_method,
+                notes: item.notes || null,
+              });
+            }
+          }
+        }
         toast({ title: 'Lead updated successfully' });
         if (statusChanged && (payload.whatsapp || payload.phone)) {
           setTimeout(() => openWhatsApp({ ...lead, ...payload }, 'status_update'), 300);
@@ -250,6 +309,22 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
         const created = await createLead.mutateAsync(payload);
         leadId = (created as any)?.id || lead?.id;
         if (pendingFiles.length > 0 && leadId) await uploadPendingDocs(leadId);
+        // Sync service items
+        if (leadId) {
+          await supabase.from('lead_services').delete().eq('lead_id', leadId);
+          for (const item of serviceItems) {
+            if (item.service_name || Number(item.base_fee) > 0) {
+              await supabase.from('lead_services').insert({
+                lead_id: leadId,
+                service_id: item.service_id && item.service_id !== '__other__' ? item.service_id : null,
+                service_name: item.service_name,
+                base_fee: Number(item.base_fee) || 0,
+                payment_method: item.payment_method,
+                notes: item.notes || null,
+              });
+            }
+          }
+        }
         toast({ title: 'Lead created successfully' });
         if (created && (payload.whatsapp || payload.phone)) {
           setWaLead(created);
@@ -471,74 +546,109 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
 
           {/* Payment Tab */}
           <TabsContent value="payment" className="space-y-4 mt-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2">
-                <Label>Payment Method</Label>
-                <Select value={form.payment_method} onValueChange={v => set('payment_method', v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {PAYMENT_METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+            {/* Service items */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-sm font-semibold">Services &amp; Fees</Label>
+                <Button variant="outline" size="sm" onClick={() => setServiceItems(prev => [...prev, mkSvcItem()])}>
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Add Service
+                </Button>
               </div>
-
-              <div className="col-span-2">
-                <Label>Service Fee (₹)</Label>
-                <Input value={form.base_fee} onChange={e => set('base_fee', e.target.value)} type="number" placeholder="0" />
-                <p className="text-xs text-muted-foreground mt-1">Enter the total amount the client pays — GST is calculated from within this price.</p>
-              </div>
-
-              {baseFee > 0 && (
-                <div className="col-span-2 rounded-lg border bg-muted/40 p-4 space-y-1.5 text-sm">
-                  <div className="flex justify-between font-semibold mb-1">
-                    <span>Total fee (client pays)</span>
-                    <span>{formatINR(baseFee)}</span>
+              <div className="space-y-3">
+                {serviceItems.map((item, idx) => (
+                  <div key={item._key} className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="col-span-2">
+                        <Label className="text-xs">Service Name</Label>
+                        <div className="flex gap-2 mt-1">
+                          <Select value={item.service_id} onValueChange={sid => {
+                            const svc = services?.find((s: any) => s.id === sid);
+                            setServiceItems(prev => prev.map((s, i) => i === idx ? { ...s, service_id: sid, service_name: svc?.name || s.service_name } : s));
+                            if (svc?.country && idx === 0) set('destination', svc.country);
+                          }}>
+                            <SelectTrigger className="w-44 h-8 text-xs"><SelectValue placeholder="Select…" /></SelectTrigger>
+                            <SelectContent>
+                              {services?.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                              <SelectItem value="__other__">Other / Custom</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Input
+                            className="flex-1 h-8 text-sm"
+                            placeholder="Service name…"
+                            value={item.service_name}
+                            onChange={e => setServiceItems(prev => prev.map((s, i) => i === idx ? { ...s, service_name: e.target.value } : s))}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Fee (₹)</Label>
+                        <Input className="mt-1 h-8 text-sm" type="number" placeholder="0" value={item.base_fee}
+                          onChange={e => setServiceItems(prev => prev.map((s, i) => i === idx ? { ...s, base_fee: e.target.value } : s))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Method</Label>
+                        <Select value={item.payment_method} onValueChange={v => setServiceItems(prev => prev.map((s, i) => i === idx ? { ...s, payment_method: v } : s))}>
+                          <SelectTrigger className="mt-1 h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {PAYMENT_METHODS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-xs">Notes (optional)</Label>
+                        <Input className="mt-1 h-8 text-sm" placeholder="e.g. EK521, Hotel Dubai…" value={item.notes}
+                          onChange={e => setServiceItems(prev => prev.map((s, i) => i === idx ? { ...s, notes: e.target.value } : s))} />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1">
+                      {(() => {
+                        const fee = Number(item.base_fee) || 0;
+                        if (!fee) return <span className="text-xs text-muted-foreground">Enter fee to see breakdown</span>;
+                        const gst = calcGST(fee, item.payment_method, settings.serviceGSTRate, settings.bankGSTRate);
+                        if (gst.gstAmount > 0) return <span className="text-xs text-amber-700">GST {formatINR(gst.gstAmount)} · Net {formatINR(gst.netFee)}</span>;
+                        return <span className="text-xs text-muted-foreground">Fee {formatINR(fee)} · No GST</span>;
+                      })()}
+                      {serviceItems.length > 1 && (
+                        <Button variant="ghost" size="sm" className="h-6 px-2 text-destructive hover:text-destructive"
+                          onClick={() => setServiceItems(prev => prev.filter((_, i) => i !== idx))}>
+                          <X className="h-3.5 w-3.5 mr-1" /> Remove
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                  {isUPI ? (
-                    <>
-                      <div className="flex justify-between text-xs text-amber-700 pl-3">
-                        <span>↳ Service GST ({settings.serviceGSTRate}%)</span>
-                        <span>― {formatINR(service.serviceGST)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-blue-700 pl-3">
-                        <span>↳ Bank GST ({settings.bankGSTRate}%)</span>
-                        <span>― {formatINR(service.bankGST)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs pl-3 text-muted-foreground border-t pt-1.5 mt-1">
-                        <span>Total GST</span>
-                        <span>― {formatINR(service.totalGST)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs pl-3 font-medium text-green-700">
-                        <span>Your net income</span>
-                        <span>{formatINR(service.netFee)}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-muted-foreground pl-3">No GST — applies only for UPI/GPay payments.</p>
-                  )}
-                </div>
-              )}
+                ))}
+              </div>
+              {(() => {
+                const total = serviceItems.reduce((sum, s) => sum + calcGST(Number(s.base_fee)||0, s.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0);
+                const totalGST = serviceItems.reduce((sum, s) => sum + calcGST(Number(s.base_fee)||0, s.payment_method, settings.serviceGSTRate, settings.bankGSTRate).gstAmount, 0);
+                if (!total) return null;
+                return (
+                  <div className="rounded-lg border bg-muted/40 p-3 text-sm flex justify-between items-center mt-2">
+                    <span className="font-semibold">Grand Total</span>
+                    <span className="font-bold font-mono">
+                      {formatINR(total)}
+                      {totalGST > 0 && <span className="text-xs text-amber-700 ml-2">(GST {formatINR(totalGST)})</span>}
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
 
+            {/* Amount paid */}
+            <div className="border-t pt-4 grid grid-cols-2 gap-4">
               <div>
                 <Label>Amount Paid (₹)</Label>
-                <Input value={form.amount_paid} onChange={e => set('amount_paid', e.target.value)} type="number" placeholder="0" />
+                <Input value={form.amount_paid} onChange={e => set('amount_paid', e.target.value)} type="number" placeholder="0" className="mt-1" />
               </div>
               <div className="flex items-end pb-1">
-                <p className="text-xs text-muted-foreground">Both GSTs are extracted from within the fee — no extra charge to the client.</p>
+                {(() => {
+                  const total = serviceItems.reduce((sum, s) => sum + calcGST(Number(s.base_fee)||0, s.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0);
+                  const paid = Number(form.amount_paid) || 0;
+                  const bal = total - paid;
+                  if (!total) return null;
+                  return <p className={`text-sm font-medium ${bal > 0 ? 'text-destructive' : 'text-green-600'}`}>Balance: {bal > 0 ? formatINR(bal) : '✓ Fully Paid'}</p>;
+                })()}
               </div>
-
-              {balance > 0 && (
-                <div className="col-span-2 flex justify-between font-semibold text-destructive text-sm bg-red-50 rounded-lg p-3 border border-red-100">
-                  <span>Balance Pending</span>
-                  <span>{formatINR(balance)}</span>
-                </div>
-              )}
-              {balance === 0 && grandTotal > 0 && (
-                <div className="col-span-2 flex justify-between font-semibold text-green-700 text-sm bg-green-50 rounded-lg p-3 border border-green-100">
-                  <span>✓ Fully Paid</span>
-                  <span>{formatINR(grandTotal)}</span>
-                </div>
-              )}
             </div>
           </TabsContent>
 

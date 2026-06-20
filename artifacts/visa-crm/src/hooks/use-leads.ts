@@ -294,3 +294,68 @@ export function useCreateLeadPayment() {
     }
   });
 }
+
+export function useLeadServices(leadId: string) {
+  return useQuery({
+    queryKey: ['lead_services', leadId],
+    queryFn: async () => {
+      if (!leadId) return [];
+      const { data, error } = await supabase
+        .from('lead_services')
+        .select('*')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!leadId,
+  });
+}
+
+export function useCreateLeadService() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (svc: { lead_id: string; service_id?: string | null; service_name: string; base_fee: number; payment_method: string; notes?: string | null }) => {
+      const { data, error } = await supabase.from('lead_services').insert([svc]).select().single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['lead_services', data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['leads', data.lead_id] });
+    },
+  });
+}
+
+export function useUpdateLeadService() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
+      const { data, error } = await supabase.from('lead_services').update(updates).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['lead_services', data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['leads', data.lead_id] });
+    },
+  });
+}
+
+export function useDeleteLeadService() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, leadId }: { id: string; leadId: string }) => {
+      const { error } = await supabase.from('lead_services').delete().eq('id', id);
+      if (error) throw error;
+      return { leadId };
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['lead_services', variables.leadId] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['leads', variables.leadId] });
+    },
+  });
+}

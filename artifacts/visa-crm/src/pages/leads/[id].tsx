@@ -32,6 +32,47 @@ function whatsappLink(phone: string, name: string) {
   return `https://wa.me/${wa.length === 10 ? '91' + wa : wa}?text=${msg}`;
 }
 
+function buildPaymentReceiptMsg(
+  leadName: string,
+  svcBreakdown: any[],
+  servicePaidMap: Record<string, number>,
+  thisPayment: number,
+  newTotalPaid: number,
+  totalFee: number,
+  date: string,
+  time: string,
+): string {
+  const totalBalance = Math.max(0, totalFee - newTotalPaid);
+  const lines: string[] = [
+    `Hello ${leadName},`,
+    ``,
+    `We have received your payment of *${formatINR(thisPayment)}* on ${date} at ${time}.`,
+    ``,
+    `*Services:*`,
+  ];
+  svcBreakdown.forEach((ls: any) => {
+    const paid = servicePaidMap[ls.service_name] || 0;
+    const due = Math.max(0, ls.totalAmount - paid);
+    lines.push(`• ${ls.service_name || 'Service'}`);
+    lines.push(`  Charges: ${formatINR(ls.totalAmount)} | Paid: ${formatINR(paid)} | Due: ${formatINR(due)}`);
+  });
+  lines.push(``);
+  lines.push(`*Total Charges:* ${formatINR(totalFee)}`);
+  lines.push(`*This Payment:* ${formatINR(thisPayment)}`);
+  lines.push(`*Total Paid:* ${formatINR(newTotalPaid)}`);
+  lines.push(`*Balance Due:* ${formatINR(totalBalance)}`);
+  lines.push(``);
+  lines.push(`Thank you! 🙏`);
+  return lines.join('\n');
+}
+
+function phoneToWAUrl(phone: string, message: string): string {
+  let clean = phone.replace(/\D/g, '');
+  if (clean.startsWith('0')) clean = clean.slice(1);
+  if (clean.length === 10) clean = '91' + clean;
+  return `https://wa.me/${clean}?text=${encodeURIComponent(message)}`;
+}
+
 function InfoRow({ label, value }: { label: string; value?: string | null }) {
   if (!value) return null;
   return (
@@ -137,13 +178,16 @@ export default function LeadDetail() {
       const now = new Date();
       const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
       const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const updatedLead = { ...lead, amount_paid: newPaid, base_fee: totalFee };
-      const waUrl = (lead.whatsapp || lead.phone)
-        ? buildWAUrl(updatedLead, 'payment_received', { this_payment: formatINR(amount), date, time })
-        : null;
+      const phone = lead.whatsapp || lead.phone;
+      const updatedMap = { ...servicePaidMap };
+      if (payForm.service_tag && payForm.service_tag !== '__all__') {
+        updatedMap[payForm.service_tag] = (updatedMap[payForm.service_tag] || 0) + amount;
+      }
+      const waMsg = buildPaymentReceiptMsg(lead.pax_name, svcBreakdown, updatedMap, amount, newPaid, totalFee, date, time);
+      const waUrl = phone ? phoneToWAUrl(phone, waMsg) : null;
 
       toast({ title: `Payment of ${formatINR(amount)} recorded` });
-      if (waUrl && waUrl !== '#') {
+      if (waUrl) {
         setPaymentWA({ url: waUrl, amount: formatINR(amount) });
       }
     } catch (e: any) {
@@ -167,13 +211,12 @@ export default function LeadDetail() {
       const now = new Date();
       const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
       const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-      const updatedLead = { ...lead, amount_paid: newLeadPaid, base_fee: totalFee };
-      const waUrl = (lead.whatsapp || lead.phone)
-        ? buildWAUrl(updatedLead, 'payment_received', { this_payment: formatINR(newAmount), date, time })
-        : null;
+      const phone = lead.whatsapp || lead.phone;
+      const waMsg = buildPaymentReceiptMsg(lead.pax_name, svcBreakdown, servicePaidMap, newAmount, newLeadPaid, totalFee, date, time);
+      const waUrl = phone ? phoneToWAUrl(phone, waMsg) : null;
 
       toast({ title: `Payment updated to ${formatINR(newAmount)}` });
-      if (waUrl && waUrl !== '#') setPaymentWA({ url: waUrl, amount: formatINR(newAmount) });
+      if (waUrl) setPaymentWA({ url: waUrl, amount: formatINR(newAmount) });
       setEditPayment(null);
     } catch (e: any) {
       toast({ title: 'Error', description: e.message, variant: 'destructive' });
@@ -266,15 +309,17 @@ export default function LeadDetail() {
         const date = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
         const time = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
         const { data: svcs } = await supabase.from('lead_services').select('*').eq('lead_id', id!);
-        const newTotalFee = svcs ? svcs.reduce((s: number, ls: any) => s + calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate).totalAmount, 0) : fee;
-        const updatedLeadForWA = { ...lead, amount_paid: newTotalPaid, base_fee: newTotalFee };
-        const waUrl = (lead.whatsapp || lead.phone)
-          ? buildWAUrl(updatedLeadForWA, 'payment_received', { this_payment: formatINR(paidAmt), date, time })
-          : null;
+        const freshBreakdown = (svcs || []).map((ls: any) => ({ ...ls, ...calcGST(ls.base_fee || 0, ls.payment_method, settings.serviceGSTRate, settings.bankGSTRate) }));
+        const newTotalFee = freshBreakdown.reduce((s: number, ls: any) => s + ls.totalAmount, 0) || fee;
+        const phone = lead.whatsapp || lead.phone;
+        const updatedMap = { ...servicePaidMap };
+        if (addSvcForm.service_name) updatedMap[addSvcForm.service_name] = (updatedMap[addSvcForm.service_name] || 0) + paidAmt;
+        const waMsg = buildPaymentReceiptMsg(lead.pax_name, freshBreakdown, updatedMap, paidAmt, newTotalPaid, newTotalFee, date, time);
+        const waUrl = phone ? phoneToWAUrl(phone, waMsg) : null;
         toast({
           title: 'Service added & payment recorded',
-          description: waUrl && waUrl !== '#' ? 'Send payment receipt on WhatsApp.' : undefined,
-          action: waUrl && waUrl !== '#' ? (
+          description: waUrl ? 'Send payment receipt on WhatsApp.' : undefined,
+          action: waUrl ? (
             <a href={waUrl} target="_blank" rel="noopener noreferrer"
                className="inline-flex items-center gap-1 rounded-md border border-[#25D366] px-3 py-1.5 text-xs font-medium text-[#25D366] hover:bg-green-50 transition-colors">
               <MessageCircle className="h-3.5 w-3.5" /> WhatsApp

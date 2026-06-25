@@ -327,7 +327,11 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
         }
         toast({ title: 'Lead created successfully' });
         if (created && (payload.whatsapp || payload.phone)) {
-          setWaLead(created);
+          const hasPaid = Number(payload.amount_paid) > 0;
+          setWaLead(hasPaid
+            ? { ...created, __waType: 'payment', __prevPaid: 0 }
+            : created
+          );
           // stay open — user will close after tapping WhatsApp or Skip
         } else {
           onClose();

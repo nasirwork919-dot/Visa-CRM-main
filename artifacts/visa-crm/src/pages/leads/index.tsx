@@ -463,7 +463,7 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
               </div>
               <div>
                 <Label>Assign To</Label>
-                <Select value={form.assigned_to} onValueChange={handleAgentChange} disabled={!can('leads_assign')}>
+                <Select value={form.assigned_to} onValueChange={handleAgentChange} disabled={!can('leads_assign') && !can('leads_edit') && !can('leads_create')}>
                   <SelectTrigger><SelectValue placeholder="Select agent" /></SelectTrigger>
                   <SelectContent>
                     {agents?.map(a => <SelectItem key={a.id} value={a.id}>{a.full_name}</SelectItem>)}

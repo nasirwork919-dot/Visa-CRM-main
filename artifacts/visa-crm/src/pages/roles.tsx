@@ -82,7 +82,7 @@ function RoleModal({ open, onClose, role }: { open: boolean; onClose: () => void
         <div className="space-y-4">
           <div>
             <Label>Role Name *</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g., Senior Agent" disabled={role?.is_preset} />
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g., Senior Agent" />
           </div>
           <div>
             <Label>Description</Label>

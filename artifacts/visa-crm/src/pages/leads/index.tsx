@@ -460,7 +460,10 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
                   <Input
                     className="mt-2"
                     value={form.service_name}
-                    onChange={e => set('service_name', e.target.value)}
+                    onChange={e => {
+                      set('service_name', e.target.value);
+                      setServiceItems(prev => prev.map((s, i) => i === 0 ? { ...s, service_name: e.target.value } : s));
+                    }}
                     placeholder="Enter service name..."
                   />
                 )}

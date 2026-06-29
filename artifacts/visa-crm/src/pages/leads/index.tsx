@@ -143,6 +143,7 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
   useEffect(() => {
     if (!open) return;
     if (isEdit && existingServices && existingServices.length > 0) {
+      // Lead already has multi-service rows — use them
       setServiceItems(existingServices.map((s: any) => mkSvcItem({
         _key: s.id,
         id: s.id,
@@ -152,6 +153,15 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
         payment_method: s.payment_method || 'Cash',
         notes: s.notes || '',
       })));
+    } else if (isEdit && existingServices !== undefined) {
+      // No lead_services rows yet — seed from the lead's own columns so we don't erase them on re-save
+      const f = blankForm();
+      setServiceItems([mkSvcItem({
+        service_id: f.service_id || '',
+        service_name: f.service_name || '',
+        base_fee: String(f.base_fee || ''),
+        payment_method: f.payment_method || 'Cash',
+      })]);
     } else if (!isEdit && open) {
       setServiceItems([mkSvcItem()]);
     }

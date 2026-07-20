@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
-import { useLeads, useCreateLead, useUpdateLead, useLeadDocuments, useDeleteLead, useBulkDeleteLeads, useLeadServices } from '@/hooks/use-leads';
+import { useLeads, useCreateLead, useUpdateLead, useLeadDocuments, useDeleteLead, useBulkDeleteLeads, useLeadServices, useCreateLeadPayment } from '@/hooks/use-leads';
 import { useServices } from '@/hooks/use-services';
 import { useProfiles } from '@/hooks/use-team';
 import { useAuth } from '@/context/AuthContext';
@@ -70,6 +70,7 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
   const [serviceItems, setServiceItems] = useState<ServiceItem[]>([mkSvcItem()]);
   const createLead = useCreateLead();
   const updateLead = useUpdateLead();
+  const createPayment = useCreateLeadPayment();
   const { toast } = useToast();
   const isEdit = !!lead;
 
@@ -334,6 +335,17 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
               });
             }
           }
+        }
+        // Create a payment record if amount was collected during lead creation
+        if (leadId && Number(payload.amount_paid) > 0) {
+          await createPayment.mutateAsync({
+            lead_id: leadId,
+            amount: Number(payload.amount_paid),
+            method: primaryMethod,
+            note: combinedServiceName ? `Payment for ${combinedServiceName}` : 'Initial payment',
+            payment_date: null,
+            received_by: profile?.id,
+          });
         }
         toast({ title: 'Lead created successfully' });
         if (created && (payload.whatsapp || payload.phone)) {

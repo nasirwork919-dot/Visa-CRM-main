@@ -799,7 +799,7 @@ export default function LeadDetail() {
                   <div>
                     <Label>Amount (₹)</Label>
                     <Input type="number" placeholder="0" value={payForm.amount}
-                      onChange={e => { setPayForm(f => ({ ...f, amount: e.target.value })); setPaymentWA(null); }} />
+                      onChange={e => setPayForm(f => ({ ...f, amount: e.target.value }))} />
                   </div>
                   <div>
                     <Label>Method</Label>

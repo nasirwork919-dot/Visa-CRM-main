@@ -4,7 +4,14 @@
       "Bash(git config *)",
       "Bash(git commit -m ' *)",
       "Bash(git add *)",
-      "PowerShell(icacls \"E:\\\\Visa-CRM-main\\\\artifacts\\\\visa-crm\\\\src\\\\utils\\\\gst.ts\" 2>&1)"
+      "PowerShell(icacls \"E:\\\\Visa-CRM-main\\\\artifacts\\\\visa-crm\\\\src\\\\utils\\\\gst.ts\" 2>&1)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(npx tsc *)",
+      "Bash(git commit *)",
+      "PowerShell(railway version 2>&1)",
+      "PowerShell(railway --version 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"https://wa-bot-production-675f.up.railway.app\" -TimeoutSec 10)"
     ]
   }
 }

@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node bot.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
     "@supabase/supabase-js": "^2.39.0",

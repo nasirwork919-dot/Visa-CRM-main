@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 
-const BOT_API = 'http://localhost:3001';
+const BOT_API = (import.meta.env.VITE_WA_BOT_URL as string) || 'http://localhost:3001';
 
 interface BotStatus {
   connected: boolean;

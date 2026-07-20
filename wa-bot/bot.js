@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -13,12 +14,16 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const http = require('http');
 
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 const botState = { connected: false, phone: null, qr: null };
 let currentSock = null;
 let isDisconnecting = false;
 
-// ── HTTP API server for CRM dashboard ────────────────────────────────────────
+// ── HTTP API server (CRM dashboard + health check) ────────────────────────────
+const PORT = process.env.PORT || 3001;
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -27,34 +32,58 @@ http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.end('{}'); return; }
 
   if (req.method === 'POST' && req.url === '/disconnect') {
-    console.log('Disconnect requested from CRM...');
+    console.log('Disconnect requested...');
     isDisconnecting = true;
     botState.connected = false;
     botState.phone = null;
     botState.qr = null;
 
-    try {
-      if (currentSock) await currentSock.logout();
-    } catch (_) {}
+    try { if (currentSock) await currentSock.logout(); } catch (_) {}
 
-    // Delete saved session so a fresh QR is generated
+    // Clear local auth + Supabase session
     const authDir = path.join(__dirname, 'auth_info');
     if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
+    await supabase.from('wa_auth_sessions').delete().eq('id', 'default');
 
     isDisconnecting = false;
-    setTimeout(startBot, 1000); // restart and show new QR
+    setTimeout(startBot, 1000);
     res.end(JSON.stringify({ ok: true }));
     return;
   }
 
-  // GET / — return status
   res.end(JSON.stringify(botState));
-}).listen(3001, () => console.log('Bot API listening on http://localhost:3001'));
+}).listen(PORT, () => console.log(`Bot API listening on port ${PORT}`));
 
-// ── Supabase + Claude ─────────────────────────────────────────────────────────
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+// ── Supabase auth helpers ─────────────────────────────────────────────────────
+async function loadCredsFromSupabase() {
+  try {
+    const { data } = await supabase.from('wa_auth_sessions').select('creds').eq('id', 'default').maybeSingle();
+    if (data?.creds) {
+      const authDir = path.join(__dirname, 'auth_info');
+      fs.mkdirSync(authDir, { recursive: true });
+      fs.writeFileSync(path.join(authDir, 'creds.json'), JSON.stringify(data.creds), 'utf8');
+      console.log('Loaded credentials from Supabase');
+      return true;
+    }
+  } catch (err) {
+    console.error('Could not load creds from Supabase:', err.message);
+  }
+  return false;
+}
 
+async function saveCredsToSupabase(creds) {
+  try {
+    await supabase.from('wa_auth_sessions').upsert({
+      id: 'default',
+      creds,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Could not save creds to Supabase:', err.message);
+  }
+}
+
+// ── Claude prompt + tools ─────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a friendly visa application assistant for Euro World Global Transit Private Limited. Your job is to qualify leads via WhatsApp by collecting their information naturally.
 
 Collect these details one at a time in a conversational way:
@@ -93,33 +122,30 @@ const tools = [
   },
 ];
 
+// ── Conversation helpers ──────────────────────────────────────────────────────
 async function getOrCreateConversation(phone) {
   const { data } = await supabase.from('wa_conversations').select('*').eq('phone', phone).maybeSingle();
   if (data) return data;
-  const { data: newConv } = await supabase.from('wa_conversations').insert({ phone, messages: [], stage: 'qualifying' }).select().single();
+  const { data: newConv } = await supabase.from('wa_conversations')
+    .insert({ phone, messages: [], stage: 'qualifying' }).select().single();
   return newConv;
 }
 
 async function saveConversation(phone, messages, extra = {}) {
-  await supabase.from('wa_conversations').update({ messages, updated_at: new Date().toISOString(), ...extra }).eq('phone', phone);
+  await supabase.from('wa_conversations')
+    .update({ messages, updated_at: new Date().toISOString(), ...extra }).eq('phone', phone);
 }
 
+// ── Message handler ───────────────────────────────────────────────────────────
 async function handleMessage(sock, from, text) {
   const phone = from.replace(/@.*/, '');
-  console.log(`[${phone}] Received: ${text}`);
+  console.log(`[${phone}] ${text}`);
 
   const conv = await getOrCreateConversation(phone);
-  if (!conv) {
-    console.log(`[${phone}] ERROR: Could not get/create conversation (check SUPABASE_SERVICE_KEY in .env)`);
-    return;
-  }
-  if (conv.lead_id) {
-    console.log(`[${phone}] Already a lead (${conv.lead_id}), skipping.`);
-    return;
-  }
+  if (!conv) { console.error(`[${phone}] Could not get conversation`); return; }
+  if (conv.lead_id) { console.log(`[${phone}] Already qualified`); return; }
 
   const messages = [...(conv.messages || []), { role: 'user', content: text }];
-  console.log(`[${phone}] Calling Claude (${messages.length} messages)...`);
 
   const response = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -133,7 +159,7 @@ async function handleMessage(sock, from, text) {
     if (block.type === 'text' && block.text) {
       await saveConversation(phone, [...messages, { role: 'assistant', content: block.text }]);
       await sock.sendMessage(from, { text: block.text });
-      console.log(`[${phone}] Reply sent.`);
+      console.log(`[${phone}] Reply sent`);
 
     } else if (block.type === 'tool_use' && block.name === 'create_lead') {
       const input = block.input;
@@ -151,31 +177,32 @@ async function handleMessage(sock, from, text) {
         notes: notes || null,
         source: 'WhatsApp',
         status: 'Under Process',
-        base_fee: 0,
-        gst_amount: 0,
-        total_amount: 0,
-        amount_paid: 0,
+        base_fee: 0, gst_amount: 0, total_amount: 0, amount_paid: 0,
         payment_method: 'Cash',
       }).select().single();
 
-      if (leadErr) console.error(`[${phone}] Lead insert error:`, leadErr.message);
+      if (leadErr) console.error(`Lead insert error:`, leadErr.message);
 
       await saveConversation(phone, [...messages, { role: 'assistant', content: response.content }], {
-        lead_id: lead?.id,
-        stage: 'qualified',
+        lead_id: lead?.id, stage: 'qualified',
       });
 
       const confirmMsg = `Thank you ${input.pax_name}!\n\nYour details have been registered. Our team will contact you within 2 hours regarding your ${input.service_name} application.\n\nFor urgent queries, please reply here.`;
       await sock.sendMessage(from, { text: confirmMsg });
-      console.log(`[${phone}] Lead created: ${input.pax_name} - ${input.service_name} (id: ${lead?.id})`);
+      console.log(`Lead created: ${input.pax_name} - ${input.service_name} (${lead?.id})`);
     }
   }
 }
 
+// ── Bot startup ───────────────────────────────────────────────────────────────
 async function startBot() {
   if (isDisconnecting) return;
 
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'auth_info'));
+  // Always try to load latest credentials from Supabase first
+  await loadCredsFromSupabase();
+
+  const authDir = path.join(__dirname, 'auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
@@ -188,11 +215,15 @@ async function startBot() {
   });
 
   currentSock = sock;
-  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('creds.update', async () => {
+    await saveCreds();
+    await saveCredsToSupabase(state.creds); // keep Supabase in sync
+  });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('\nScan this QR code with WhatsApp -> Linked Devices:\n');
+      console.log('\nScan QR code with WhatsApp → Linked Devices:\n');
       qrcode.generate(qr, { small: true });
       botState.qr = await QRCode.toDataURL(qr);
       botState.connected = false;
@@ -203,20 +234,17 @@ async function startBot() {
       botState.connected = true;
       botState.phone = phone;
       botState.qr = null;
-      console.log(`\n✅ WhatsApp connected! Phone: ${phone}. Bot is running.\n`);
+      console.log(`✅ Connected! Phone: ${phone}`);
     }
     if (connection === 'close') {
       if (isDisconnecting) return;
       botState.connected = false;
       botState.qr = null;
       const code = lastDisconnect?.error?.output?.statusCode;
-      const reason = lastDisconnect?.error?.message || 'unknown';
-      console.log(`Connection closed: ${reason} (code: ${code})`);
+      console.log(`Connection closed (code: ${code})`);
       if (code !== DisconnectReason.loggedOut) {
-        console.log('Reconnecting in 3s...');
         setTimeout(startBot, 3000);
       } else {
-        console.log('Logged out. Waiting for new QR scan...');
         setTimeout(startBot, 1000);
       }
     }
@@ -225,15 +253,11 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;
-      if (msg.key.remoteJid?.endsWith('@g.us')) continue;
+      if (msg.key.fromMe || msg.key.remoteJid?.endsWith('@g.us')) continue;
       const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       if (!text.trim()) continue;
-      try {
-        await handleMessage(sock, msg.key.remoteJid, text);
-      } catch (err) {
-        console.error('Error handling message:', err);
-      }
+      try { await handleMessage(sock, msg.key.remoteJid, text); }
+      catch (err) { console.error('Message error:', err.message); }
     }
   });
 }

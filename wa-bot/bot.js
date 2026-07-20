@@ -15,12 +15,37 @@ const QRCode = require('qrcode');
 const http = require('http');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-const claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+let claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 const botState = { connected: false, phone: null, qr: null };
 let currentSock = null;
 let isDisconnecting = false;
+
+// ── Dynamic settings from Supabase ────────────────────────────────────────────
+let cachedSettings = { system_prompt: null, claude_api_key: null };
+let lastAppliedApiKey = process.env.CLAUDE_API_KEY;
+
+async function refreshBotSettings() {
+  try {
+    const { data } = await supabase.from('wa_bot_settings').select('system_prompt, claude_api_key').eq('id', 'default').maybeSingle();
+    if (data) {
+      cachedSettings.system_prompt = data.system_prompt || null;
+      const newKey = data.claude_api_key || process.env.CLAUDE_API_KEY;
+      if (newKey !== lastAppliedApiKey) {
+        claude = new Anthropic({ apiKey: newKey });
+        lastAppliedApiKey = newKey;
+        console.log('Claude API key updated from Supabase');
+      }
+    }
+  } catch (err) {
+    console.error('Could not refresh bot settings:', err.message);
+  }
+}
+
+// Refresh on startup and every 5 minutes
+refreshBotSettings();
+setInterval(refreshBotSettings, 5 * 60 * 1000);
 
 // ── HTTP API server (CRM dashboard + health check) ────────────────────────────
 const PORT = process.env.PORT || 3001;
@@ -84,7 +109,7 @@ async function saveCredsToSupabase(creds) {
 }
 
 // ── Claude prompt + tools ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a friendly visa application assistant for Euro World Global Transit Private Limited. Your job is to qualify leads via WhatsApp by collecting their information naturally.
+const DEFAULT_SYSTEM_PROMPT = `You are a friendly visa application assistant for Euro World Global Transit Private Limited. Your job is to qualify leads via WhatsApp by collecting their information naturally.
 
 Collect these details one at a time in a conversational way:
 1. Customer's full name
@@ -103,6 +128,10 @@ Rules:
 
 After creating the lead, send this confirmation:
 "Thank you [name]! Your details have been registered. Our team will contact you within 2 hours regarding your [service] application. For urgent queries, please reply here."`;
+
+function getSystemPrompt() {
+  return cachedSettings.system_prompt || DEFAULT_SYSTEM_PROMPT;
+}
 
 const tools = [
   {
@@ -150,7 +179,7 @@ async function handleMessage(sock, from, text) {
   const response = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 512,
-    system: SYSTEM_PROMPT,
+    system: getSystemPrompt(),
     messages,
     tools,
   });

@@ -11,7 +11,8 @@ import {
   ShieldAlert,
   BarChart,
   UserPlus,
-  ClipboardList
+  ClipboardList,
+  Bot
 } from 'lucide-react';
 import { useAuth, PermissionGuard } from '@/context/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -60,6 +61,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
     { name: 'Team', href: '/team', icon: Users, permission: 'users_view' },
     { name: 'Roles', href: '/roles', icon: Settings, permission: 'roles_manage' },
     { name: 'Activity Log', href: '/activity-log', icon: ClipboardList, permission: 'roles_manage' },
+    { name: 'WhatsApp Bot', href: '/whatsapp-bot', icon: Bot, permission: 'roles_manage' },
     { name: 'Settings', href: '/settings', icon: Settings, permission: 'roles_manage' },
   ];
 

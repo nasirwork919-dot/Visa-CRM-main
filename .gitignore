@@ -47,3 +47,9 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# WhatsApp bot secrets and session data
+wa-bot/.env
+wa-bot/auth_info/
+wa-bot/node_modules/
+qr.png

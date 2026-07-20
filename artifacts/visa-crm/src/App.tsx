@@ -20,6 +20,7 @@ import Team from "@/pages/team";
 import Roles from "@/pages/roles";
 import ActivityLog from "@/pages/activity-log";
 import SettingsPage from "@/pages/settings";
+import WhatsAppBotPage from "@/pages/whatsapp-bot";
 
 const queryClient = new QueryClient();
 
@@ -50,6 +51,7 @@ function Router() {
       <Route path="/roles"><ProtectedRoute component={Roles} /></Route>
       <Route path="/activity-log"><ProtectedRoute component={ActivityLog} /></Route>
       <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
+      <Route path="/whatsapp-bot"><ProtectedRoute component={WhatsAppBotPage} /></Route>
       <Route path="/">
         {() => {
           const { user, loading } = useAuth();

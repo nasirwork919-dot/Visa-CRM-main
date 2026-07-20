@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const {
   default: makeWASocket,
@@ -12,16 +13,45 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const http = require('http');
 
-// ── Status state (read by HTTP server) ───────────────────────────────────────
+// ── Shared state ──────────────────────────────────────────────────────────────
 const botState = { connected: false, phone: null, qr: null };
+let currentSock = null;
+let isDisconnecting = false;
 
-// ── Tiny HTTP API server for the CRM dashboard ───────────────────────────────
-http.createServer((req, res) => {
+// ── HTTP API server for CRM dashboard ────────────────────────────────────────
+http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Content-Type', 'application/json');
+
+  if (req.method === 'OPTIONS') { res.end('{}'); return; }
+
+  if (req.method === 'POST' && req.url === '/disconnect') {
+    console.log('Disconnect requested from CRM...');
+    isDisconnecting = true;
+    botState.connected = false;
+    botState.phone = null;
+    botState.qr = null;
+
+    try {
+      if (currentSock) await currentSock.logout();
+    } catch (_) {}
+
+    // Delete saved session so a fresh QR is generated
+    const authDir = path.join(__dirname, 'auth_info');
+    if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
+
+    isDisconnecting = false;
+    setTimeout(startBot, 1000); // restart and show new QR
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // GET / — return status
   res.end(JSON.stringify(botState));
 }).listen(3001, () => console.log('Bot API listening on http://localhost:3001'));
 
+// ── Supabase + Claude ─────────────────────────────────────────────────────────
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
@@ -78,7 +108,6 @@ async function handleMessage(sock, from, text) {
   const phone = from.replace(/@.*/, '');
   console.log(`[${phone}] Received: ${text}`);
 
-  console.log(`[${phone}] Loading conversation...`);
   const conv = await getOrCreateConversation(phone);
   if (!conv) {
     console.log(`[${phone}] ERROR: Could not get/create conversation (check SUPABASE_SERVICE_KEY in .env)`);
@@ -90,7 +119,7 @@ async function handleMessage(sock, from, text) {
   }
 
   const messages = [...(conv.messages || []), { role: 'user', content: text }];
-  console.log(`[${phone}] Calling Claude (${messages.length} messages in history)...`);
+  console.log(`[${phone}] Calling Claude (${messages.length} messages)...`);
 
   const response = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -100,18 +129,14 @@ async function handleMessage(sock, from, text) {
     tools,
   });
 
-  console.log(`[${phone}] Claude responded with ${response.content.length} block(s), stop_reason=${response.stop_reason}`);
-
   for (const block of response.content) {
     if (block.type === 'text' && block.text) {
-      console.log(`[${phone}] Sending reply: ${block.text.substring(0, 80)}...`);
       await saveConversation(phone, [...messages, { role: 'assistant', content: block.text }]);
       await sock.sendMessage(from, { text: block.text });
       console.log(`[${phone}] Reply sent.`);
 
     } else if (block.type === 'tool_use' && block.name === 'create_lead') {
       const input = block.input;
-      console.log(`[${phone}] Creating lead:`, JSON.stringify(input));
       const notes = [
         input.passport_ready !== undefined ? `Passport ready: ${input.passport_ready ? 'Yes' : 'No'}` : '',
         input.travel_date ? `Travel date: ${input.travel_date}` : '',
@@ -148,9 +173,10 @@ async function handleMessage(sock, from, text) {
 }
 
 async function startBot() {
+  if (isDisconnecting) return;
+
   const { state, saveCreds } = await useMultiFileAuthState(path.join(__dirname, 'auth_info'));
   const { version } = await fetchLatestBaileysVersion();
-  console.log(`Using WA version: ${version.join('.')}`);
 
   const sock = makeWASocket({
     version,
@@ -161,13 +187,13 @@ async function startBot() {
     logger: require('pino')({ level: 'silent' }),
   });
 
+  currentSock = sock;
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       console.log('\nScan this QR code with WhatsApp -> Linked Devices:\n');
       qrcode.generate(qr, { small: true });
-      // Store as base64 PNG for the CRM dashboard
       botState.qr = await QRCode.toDataURL(qr);
       botState.connected = false;
       botState.phone = null;
@@ -180,6 +206,7 @@ async function startBot() {
       console.log(`\n✅ WhatsApp connected! Phone: ${phone}. Bot is running.\n`);
     }
     if (connection === 'close') {
+      if (isDisconnecting) return;
       botState.connected = false;
       botState.qr = null;
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -189,7 +216,8 @@ async function startBot() {
         console.log('Reconnecting in 3s...');
         setTimeout(startBot, 3000);
       } else {
-        console.log('Logged out. Delete the auth_info folder and restart.');
+        console.log('Logged out. Waiting for new QR scan...');
+        setTimeout(startBot, 1000);
       }
     }
   });

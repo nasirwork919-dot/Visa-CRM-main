@@ -2,8 +2,20 @@ import { useState, useEffect } from 'react';
 import { SidebarLayout } from '@/components/layout/SidebarLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Smartphone, Wifi, WifiOff, RefreshCw, Bot } from 'lucide-react';
+import { Smartphone, Wifi, WifiOff, RefreshCw, Bot, LogOut, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { useToast } from '@/hooks/use-toast';
 
 const BOT_API = 'http://localhost:3001';
 
@@ -17,10 +29,12 @@ export default function WhatsAppBotPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [offline, setOffline] = useState(false);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const { toast } = useToast();
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch(`${BOT_API}`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(BOT_API, { signal: AbortSignal.timeout(2000) });
       const data: BotStatus = await res.json();
       setStatus(data);
       setOffline(false);
@@ -36,6 +50,21 @@ export default function WhatsAppBotPage() {
     const interval = setInterval(fetchStatus, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    try {
+      await fetch(`${BOT_API}/disconnect`, { method: 'POST', signal: AbortSignal.timeout(5000) });
+      toast({ title: 'Disconnected', description: 'Scan the QR code to connect a new number.' });
+      // Poll faster right after disconnect
+      setTimeout(fetchStatus, 1500);
+      setTimeout(fetchStatus, 4000);
+    } catch {
+      toast({ title: 'Error', description: 'Could not reach the bot. Is it running?', variant: 'destructive' });
+    } finally {
+      setDisconnecting(false);
+    }
+  };
 
   const statusBadge = () => {
     if (offline) return <Badge variant="outline" className="text-muted-foreground">Bot Offline</Badge>;
@@ -90,7 +119,7 @@ export default function WhatsAppBotPage() {
           </CardContent>
         </Card>
 
-        {/* QR Code Card */}
+        {/* QR Code Card — shown when disconnected and QR is available */}
         {!offline && status && !status.connected && (
           <Card>
             <CardHeader className="pb-3">
@@ -105,35 +134,68 @@ export default function WhatsAppBotPage() {
                   <div className="border rounded-lg p-4 inline-block bg-white">
                     <img src={status.qr} alt="WhatsApp QR Code" className="w-56 h-56" />
                   </div>
-                  <p className="text-xs text-muted-foreground">QR code refreshes automatically</p>
+                  <p className="text-xs text-muted-foreground">QR code refreshes automatically every few seconds</p>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">Generating QR code... Please wait.</p>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating QR code... Please wait.
+                </div>
               )}
             </CardContent>
           </Card>
         )}
 
-        {/* Connected Info */}
+        {/* Connected — active status + disconnect button */}
         {status?.connected && (
           <Card>
             <CardContent className="pt-6">
-              <div className="flex items-start gap-3">
-                <div className="h-9 w-9 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center shrink-0">
-                  <Bot className="h-5 w-5 text-green-600 dark:text-green-400" />
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center shrink-0">
+                    <Bot className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Bot is active</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      Incoming messages are handled by the AI. Qualified leads are automatically added to the CRM.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-medium text-sm">Bot is active</p>
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    Incoming WhatsApp messages are being handled by the AI. Qualified leads are automatically added to the CRM.
-                  </p>
-                </div>
+
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="shrink-0 text-destructive border-destructive hover:bg-destructive hover:text-destructive-foreground">
+                      <LogOut className="h-3.5 w-3.5 mr-1.5" />
+                      Disconnect
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Disconnect WhatsApp?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will log out the current number (+{status.phone}) and show a new QR code to connect a different number.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={handleDisconnect}
+                        disabled={disconnecting}
+                        className="bg-destructive hover:bg-destructive/90"
+                      >
+                        {disconnecting ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                        Yes, Disconnect
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Offline instructions */}
+        {/* Bot offline instructions */}
         {offline && (
           <Card className="border-dashed">
             <CardContent className="pt-6">
@@ -145,7 +207,7 @@ export default function WhatsAppBotPage() {
                 pm2 restart wa-bot
               </div>
               <p className="text-xs text-muted-foreground mt-2">
-                Or if first time: <span className="font-mono">cd E:\Visa-CRM-main\wa-bot && node bot.js</span>
+                Or first time: <span className="font-mono">cd E:\Visa-CRM-main\wa-bot &amp;&amp; node bot.js</span>
               </p>
             </CardContent>
           </Card>

@@ -108,6 +108,17 @@ async function saveCredsToSupabase(creds) {
   }
 }
 
+// ── Language detection ────────────────────────────────────────────────────────
+function detectLanguage(text) {
+  if (/[؀-ۿ]/.test(text)) {
+    // Distinguish Urdu from Arabic by common Urdu-specific characters
+    if (/[ٹڈڑںھہیے]/.test(text)) return 'urdu';
+    return 'arabic';
+  }
+  if (/[ऀ-ॿ]/.test(text)) return 'hindi';
+  return 'english';
+}
+
 // ── Claude prompt + tools ─────────────────────────────────────────────────────
 const DEFAULT_SYSTEM_PROMPT = `You are a friendly visa application assistant for Euro World Global Transit Private Limited. Your job is to qualify leads via WhatsApp by collecting their information naturally.
 
@@ -121,13 +132,21 @@ Collect these details one at a time in a conversational way:
 Rules:
 - Ask only ONE question per message
 - Be warm, professional, and brief
-- Respond in the same language the customer uses (Hindi, Urdu, or English)
+- CRITICAL: Always respond in the EXACT same language the customer is writing in
+  - If they write in Arabic → respond in Arabic
+  - If they write in Urdu → respond in Urdu
+  - If they write in Hindi → respond in Hindi
+  - If they write in English → respond in English
+- Do NOT switch languages mid-conversation
 - Do NOT discuss fees or pricing
 - Do NOT promise visa approval
 - Once you have all 5 details, call the create_lead tool immediately
 
-After creating the lead, send this confirmation:
-"Thank you [name]! Your details have been registered. Our team will contact you within 2 hours regarding your [service] application. For urgent queries, please reply here."`;
+After creating the lead, send the confirmation in the customer's language:
+- English: "Thank you [name]! Your details have been registered. Our team will contact you within 2 hours regarding your [service] application. For urgent queries, please reply here."
+- Arabic: "شكراً لك [name]! تم تسجيل بياناتك. سيتواصل معك فريقنا خلال ساعتين بخصوص طلب تأشيرة [service]. للاستفسارات العاجلة، يرجى الرد هنا."
+- Urdu: "شکریہ [name]! آپ کی معلومات درج ہو گئی ہیں۔ ہماری ٹیم 2 گھنٹوں میں آپ کی [service] درخواست کے بارے میں آپ سے رابطہ کرے گی۔ فوری سوالات کے لیے یہاں جواب دیں۔"
+- Hindi: "धन्यवाद [name]! आपकी जानकारी दर्ज हो गई है। हमारी टीम 2 घंटे के भीतर आपके [service] आवेदन के बारे में संपर्क करेगी। तत्काल प्रश्नों के लिए यहाँ उत्तर दें।"`;
 
 function getSystemPrompt() {
   return cachedSettings.system_prompt || DEFAULT_SYSTEM_PROMPT;
@@ -165,10 +184,25 @@ async function saveConversation(phone, messages, extra = {}) {
     .update({ messages, updated_at: new Date().toISOString(), ...extra }).eq('phone', phone);
 }
 
+// ── Confirmation messages by language ────────────────────────────────────────
+function confirmationMessage(name, service, lang) {
+  switch (lang) {
+    case 'arabic':
+      return `شكراً لك ${name}!\n\nتم تسجيل بياناتك بنجاح. سيتواصل معك فريقنا خلال ساعتين بخصوص طلب تأشيرة ${service}.\n\nللاستفسارات العاجلة، يرجى الرد هنا.`;
+    case 'urdu':
+      return `شکریہ ${name}!\n\nآپ کی معلومات کامیابی سے درج ہو گئی ہیں۔ ہماری ٹیم 2 گھنٹوں میں آپ کی ${service} درخواست کے بارے میں رابطہ کرے گی۔\n\nفوری سوالات کے لیے یہاں جواب دیں۔`;
+    case 'hindi':
+      return `धन्यवाद ${name}!\n\nआपकी जानकारी सफलतापूर्वक दर्ज हो गई है। हमारी टीम 2 घंटे के भीतर आपके ${service} आवेदन के बारे में संपर्क करेगी।\n\nतत्काल प्रश्नों के लिए यहाँ उत्तर दें।`;
+    default:
+      return `Thank you ${name}!\n\nYour details have been registered. Our team will contact you within 2 hours regarding your ${service} application.\n\nFor urgent queries, please reply here.`;
+  }
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 async function handleMessage(sock, from, text) {
   const phone = from.replace(/@.*/, '');
-  console.log(`[${phone}] ${text}`);
+  const lang = detectLanguage(text);
+  console.log(`[${phone}] [${lang}] ${text}`);
 
   const conv = await getOrCreateConversation(phone);
   if (!conv) { console.error(`[${phone}] Could not get conversation`); return; }
@@ -176,17 +210,25 @@ async function handleMessage(sock, from, text) {
 
   const messages = [...(conv.messages || []), { role: 'user', content: text }];
 
+  // Pass detected language as a hint so Claude locks in the right language
+  const langHint = lang !== 'english'
+    ? `\n\n[System note: Customer is writing in ${lang}. You MUST respond in ${lang} only.]`
+    : '';
+
   const response = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 512,
-    system: getSystemPrompt(),
+    system: getSystemPrompt() + langHint,
     messages,
     tools,
   });
 
+  // Track language from the first message for confirmation
+  const convLang = conv.language || lang;
+
   for (const block of response.content) {
     if (block.type === 'text' && block.text) {
-      await saveConversation(phone, [...messages, { role: 'assistant', content: block.text }]);
+      await saveConversation(phone, [...messages, { role: 'assistant', content: block.text }], { language: convLang });
       await sock.sendMessage(from, { text: block.text });
       console.log(`[${phone}] Reply sent`);
 
@@ -213,12 +255,12 @@ async function handleMessage(sock, from, text) {
       if (leadErr) console.error(`Lead insert error:`, leadErr.message);
 
       await saveConversation(phone, [...messages, { role: 'assistant', content: response.content }], {
-        lead_id: lead?.id, stage: 'qualified',
+        lead_id: lead?.id, stage: 'qualified', language: convLang,
       });
 
-      const confirmMsg = `Thank you ${input.pax_name}!\n\nYour details have been registered. Our team will contact you within 2 hours regarding your ${input.service_name} application.\n\nFor urgent queries, please reply here.`;
+      const confirmMsg = confirmationMessage(input.pax_name, input.service_name, convLang);
       await sock.sendMessage(from, { text: confirmMsg });
-      console.log(`Lead created: ${input.pax_name} - ${input.service_name} (${lead?.id})`);
+      console.log(`Lead created: ${input.pax_name} - ${input.service_name} (${lead?.id}) [${convLang}]`);
     }
   }
 }

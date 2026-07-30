@@ -15,7 +15,7 @@ const QRCode = require('qrcode');
 const http = require('http');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-let claude = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+let claude = null;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 const botState = { connected: false, phone: null, qr: null };
@@ -24,18 +24,18 @@ let isDisconnecting = false;
 
 // ── Dynamic settings from Supabase ────────────────────────────────────────────
 let cachedSettings = { system_prompt: null, claude_api_key: null };
-let lastAppliedApiKey = process.env.CLAUDE_API_KEY;
+let lastAppliedApiKey = null;
 
 async function refreshBotSettings() {
   try {
     const { data } = await supabase.from('wa_bot_settings').select('system_prompt, claude_api_key').eq('id', 'default').maybeSingle();
     if (data) {
       cachedSettings.system_prompt = data.system_prompt || null;
-      const newKey = data.claude_api_key || process.env.CLAUDE_API_KEY;
-      if (newKey !== lastAppliedApiKey) {
+      const newKey = data.claude_api_key || null;
+      if (newKey && newKey !== lastAppliedApiKey) {
         claude = new Anthropic({ apiKey: newKey });
         lastAppliedApiKey = newKey;
-        console.log('Claude API key updated from Supabase');
+        console.log('Claude API key loaded from Supabase');
       }
     }
   } catch (err) {
@@ -214,6 +214,8 @@ async function handleMessage(sock, from, text) {
   const langHint = lang !== 'english'
     ? `\n\n[System note: Customer is writing in ${lang}. You MUST respond in ${lang} only.]`
     : '';
+
+  if (!claude) throw new Error('Claude API key not configured. Add it in WhatsApp Bot Settings.');
 
   const response = await claude.messages.create({
     model: 'claude-haiku-4-5-20251001',

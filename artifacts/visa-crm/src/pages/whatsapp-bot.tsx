@@ -83,7 +83,7 @@ export default function WhatsAppBotPage() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch(BOT_API, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(BOT_API, { signal: AbortSignal.timeout(8000) });
       const data: BotStatus = await res.json();
       setStatus(data);
       setOffline(false);
@@ -117,7 +117,7 @@ export default function WhatsAppBotPage() {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      await fetch(`${BOT_API}/disconnect`, { method: 'POST', signal: AbortSignal.timeout(5000) });
+      await fetch(`${BOT_API}/disconnect`, { method: 'POST', signal: AbortSignal.timeout(10000) });
       toast({ title: 'Disconnected', description: 'Scan the QR code to connect a new number.' });
       setTimeout(fetchStatus, 1500);
     } catch {

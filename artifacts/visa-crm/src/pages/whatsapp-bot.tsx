@@ -284,7 +284,7 @@ export default function WhatsAppBotPage() {
               {/* Claude API Key */}
               <div className="space-y-2">
                 <Label htmlFor="api-key">Claude API Key</Label>
-                <p className="text-xs text-muted-foreground">Replace this to use a different Claude API key. Leave blank to use the Railway environment variable.</p>
+                <p className="text-xs text-muted-foreground">Your Claude API key for AI responses. Required — the bot won't reply without it.</p>
                 <div className="relative">
                   <Input
                     id="api-key"

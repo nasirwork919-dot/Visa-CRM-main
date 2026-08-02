@@ -21,6 +21,7 @@ let claude = null;
 const botState = { connected: false, phone: null, qr: null };
 let currentSock = null;
 let isDisconnecting = false;
+let lastError = null;
 
 // ── Dynamic settings from Supabase ────────────────────────────────────────────
 let cachedSettings = { system_prompt: null, claude_api_key: null };
@@ -57,6 +58,25 @@ http.createServer(async (req, res) => {
   res.setHeader('Pragma', 'no-cache');
 
   if (req.method === 'OPTIONS') { res.end('{}'); return; }
+
+  if (req.url === '/debug') {
+    res.end(JSON.stringify({
+      claude_initialized: claude !== null,
+      supabase_url_set: !!process.env.SUPABASE_URL,
+      supabase_key_set: !!process.env.SUPABASE_SERVICE_KEY,
+      last_applied_api_key_prefix: lastAppliedApiKey ? lastAppliedApiKey.slice(0, 12) + '...' : null,
+      last_error: lastError,
+      bot_connected: botState.connected,
+      bot_phone: botState.phone,
+    }));
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/refresh-settings') {
+    await refreshBotSettings();
+    res.end(JSON.stringify({ ok: true, claude_initialized: claude !== null }));
+    return;
+  }
 
   if (req.method === 'POST' && req.url === '/disconnect') {
     console.log('Disconnect requested...');
@@ -174,10 +194,12 @@ const tools = [
 
 // ── Conversation helpers ──────────────────────────────────────────────────────
 async function getOrCreateConversation(phone) {
-  const { data } = await supabase.from('wa_conversations').select('*').eq('phone', phone).maybeSingle();
+  const { data, error } = await supabase.from('wa_conversations').select('*').eq('phone', phone).maybeSingle();
+  if (error) throw new Error(`wa_conversations select failed: ${error.message}`);
   if (data) return data;
-  const { data: newConv } = await supabase.from('wa_conversations')
+  const { data: newConv, error: insertErr } = await supabase.from('wa_conversations')
     .insert({ phone, messages: [], stage: 'qualifying' }).select().single();
+  if (insertErr) throw new Error(`wa_conversations insert failed: ${insertErr.message}`);
   return newConv;
 }
 
@@ -220,7 +242,7 @@ async function handleMessage(sock, from, text) {
   if (!claude) throw new Error('Claude API key not configured. Add it in WhatsApp Bot Settings.');
 
   const response = await claude.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5',
     max_tokens: 512,
     system: getSystemPrompt() + langHint,
     messages,
@@ -332,7 +354,11 @@ async function startBot() {
       const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       if (!text.trim()) continue;
       try { await handleMessage(sock, msg.key.remoteJid, text); }
-      catch (err) { console.error('Message error:', err.message); }
+      catch (err) {
+        lastError = { message: err.message, time: new Date().toISOString() };
+        console.error('Message error:', err.message);
+        try { await sock.sendMessage(msg.key.remoteJid, { text: `⚠️ Bot error: ${err.message}` }); } catch (_) {}
+      }
     }
   });
 }

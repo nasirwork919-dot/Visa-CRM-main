@@ -153,15 +153,15 @@ function detectLanguage(text) {
 // ── Claude prompt + tools ─────────────────────────────────────────────────────
 const DEFAULT_SYSTEM_PROMPT = `You are a friendly visa application assistant for Euro World Global Transit Private Limited. Your job is to qualify leads via WhatsApp by collecting their information naturally.
 
-Collect these details one at a time in a conversational way:
+Collect EXACTLY these 4 details, one at a time, in this order:
 1. Customer's full name
 2. Which visa/service they need (e.g., Dubai Tourist Visa, Saudi Umrah Visa, UK Visit Visa, Schengen Visa, etc.)
-3. Travel date (approximate is fine)
-4. Number of travelers
-5. Whether their passport is ready (yes/no)
+3. Their contact phone number (for follow-up calls by our team)
+4. Travel date (approximate is fine, e.g. "next month", "March 2026")
 
 Rules:
 - Ask only ONE question per message
+- NEVER re-ask something the customer already answered — track what you have and what is missing
 - Be warm, professional, and brief
 - CRITICAL: Always respond in the EXACT same language the customer is writing in
   - If they write in Arabic → respond in Arabic
@@ -171,13 +171,13 @@ Rules:
 - Do NOT switch languages mid-conversation
 - Do NOT discuss fees or pricing
 - Do NOT promise visa approval
-- Once you have all 5 details, call the create_lead tool immediately
+- Once you have all 4 details, call the create_lead tool immediately
 
 After creating the lead, send the confirmation in the customer's language:
-- English: "Thank you [name]! Your details have been registered. Our team will contact you within 2 hours regarding your [service] application. For urgent queries, please reply here."
-- Arabic: "شكراً لك [name]! تم تسجيل بياناتك. سيتواصل معك فريقنا خلال ساعتين بخصوص طلب تأشيرة [service]. للاستفسارات العاجلة، يرجى الرد هنا."
-- Urdu: "شکریہ [name]! آپ کی معلومات درج ہو گئی ہیں۔ ہماری ٹیم 2 گھنٹوں میں آپ کی [service] درخواست کے بارے میں آپ سے رابطہ کرے گی۔ فوری سوالات کے لیے یہاں جواب دیں۔"
-- Hindi: "धन्यवाद [name]! आपकी जानकारी दर्ज हो गई है। हमारी टीम 2 घंटे के भीतर आपके [service] आवेदन के बारे में संपर्क करेगी। तत्काल प्रश्नों के लिए यहाँ उत्तर दें।"`;
+- English: "Thank you [name]! Your details have been registered. Our team will call you at [phone] within 2 hours regarding your [service] application. For urgent queries, reply here."
+- Arabic: "شكراً لك [name]! تم تسجيل بياناتك. سيتواصل معك فريقنا على [phone] خلال ساعتين بخصوص طلب [service]. للاستفسارات العاجلة، يرجى الرد هنا."
+- Urdu: "شکریہ [name]! آپ کی معلومات درج ہو گئی ہیں۔ ہماری ٹیم آپ کو [phone] پر 2 گھنٹوں میں [service] کے بارے میں رابطہ کرے گی۔ فوری سوالات کے لیے یہاں جواب دیں۔"
+- Hindi: "धन्यवाद [name]! आपकी जानकारी दर्ज हो गई है। हमारी टीम [phone] पर 2 घंटे के भीतर [service] के बारे में संपर्क करेगी। तत्काल प्रश्नों के लिए यहाँ उत्तर दें।"`;
 
 function getSystemPrompt() {
   return cachedSettings.system_prompt || DEFAULT_SYSTEM_PROMPT;
@@ -186,17 +186,16 @@ function getSystemPrompt() {
 const tools = [
   {
     name: 'create_lead',
-    description: 'Register a qualified lead in the CRM once all information is collected',
+    description: 'Register a qualified lead in the CRM once all 4 details are collected',
     input_schema: {
       type: 'object',
       properties: {
         pax_name: { type: 'string', description: 'Full name of the customer' },
         service_name: { type: 'string', description: 'Visa or service they need' },
+        phone: { type: 'string', description: 'Customer contact phone number for follow-up calls' },
         travel_date: { type: 'string', description: 'Travel date or approximate timeframe' },
-        pax_count: { type: 'number', description: 'Number of travelers' },
-        passport_ready: { type: 'boolean', description: 'Whether passport is ready' },
       },
-      required: ['pax_name', 'service_name'],
+      required: ['pax_name', 'service_name', 'phone', 'travel_date'],
     },
   },
 ];
@@ -239,16 +238,16 @@ async function saveConversation(phone, messages, extra = {}) {
 }
 
 // ── Confirmation messages by language ────────────────────────────────────────
-function confirmationMessage(name, service, lang) {
+function confirmationMessage(name, service, contactPhone, lang) {
   switch (lang) {
     case 'arabic':
-      return `شكراً لك ${name}!\n\nتم تسجيل بياناتك بنجاح. سيتواصل معك فريقنا خلال ساعتين بخصوص طلب تأشيرة ${service}.\n\nللاستفسارات العاجلة، يرجى الرد هنا.`;
+      return `شكراً لك ${name}!\n\nتم تسجيل بياناتك بنجاح.\n\n📋 الملخص:\n• الاسم: ${name}\n• الخدمة: ${service}\n• رقم التواصل: ${contactPhone}\n\nسيتواصل معك فريقنا خلال ساعتين. للاستفسارات العاجلة، يرجى الرد هنا.`;
     case 'urdu':
-      return `شکریہ ${name}!\n\nآپ کی معلومات کامیابی سے درج ہو گئی ہیں۔ ہماری ٹیم 2 گھنٹوں میں آپ کی ${service} درخواست کے بارے میں رابطہ کرے گی۔\n\nفوری سوالات کے لیے یہاں جواب دیں۔`;
+      return `شکریہ ${name}!\n\nآپ کی معلومات درج ہو گئی ہیں۔\n\n📋 خلاصہ:\n• نام: ${name}\n• سروس: ${service}\n• رابطہ نمبر: ${contactPhone}\n\nہماری ٹیم 2 گھنٹوں میں آپ سے رابطہ کرے گی۔ فوری سوالات کے لیے یہاں جواب دیں۔`;
     case 'hindi':
-      return `धन्यवाद ${name}!\n\nआपकी जानकारी सफलतापूर्वक दर्ज हो गई है। हमारी टीम 2 घंटे के भीतर आपके ${service} आवेदन के बारे में संपर्क करेगी।\n\nतत्काल प्रश्नों के लिए यहाँ उत्तर दें।`;
+      return `धन्यवाद ${name}!\n\nआपकी जानकारी दर्ज हो गई है।\n\n📋 सारांश:\n• नाम: ${name}\n• सेवा: ${service}\n• संपर्क नंबर: ${contactPhone}\n\nहमारी टीम 2 घंटे के भीतर संपर्क करेगी। तत्काल प्रश्नों के लिए यहाँ उत्तर दें।`;
     default:
-      return `Thank you ${name}!\n\nYour details have been registered. Our team will contact you within 2 hours regarding your ${service} application.\n\nFor urgent queries, please reply here.`;
+      return `Thank you ${name}!\n\nYour details have been registered.\n\n📋 Summary:\n• Name: ${name}\n• Service: ${service}\n• Contact: ${contactPhone}\n\nOur team will call you within 2 hours. For urgent queries, reply here.`;
   }
 }
 
@@ -290,17 +289,14 @@ async function handleMessage(sock, from, text) {
 
     } else if (block.type === 'tool_use' && block.name === 'create_lead') {
       const input = block.input;
-      const notes = [
-        input.passport_ready !== undefined ? `Passport ready: ${input.passport_ready ? 'Yes' : 'No'}` : '',
-        input.travel_date ? `Travel date: ${input.travel_date}` : '',
-      ].filter(Boolean).join(' | ');
+      const notes = input.travel_date ? `Travel date: ${input.travel_date}` : null;
 
       const { data: lead, error: leadErr } = await supabase.from('leads').insert({
         pax_name: input.pax_name,
-        phone: `+${phone}`,
+        phone: input.phone || `+${phone}`,
         whatsapp: `+${phone}`,
         service_name: input.service_name || '',
-        pax_count: Number(input.pax_count) || 1,
+        pax_count: 1,
         notes: notes || null,
         source: 'WhatsApp',
         status: 'Under Process',
@@ -314,7 +310,7 @@ async function handleMessage(sock, from, text) {
         lead_id: lead?.id, stage: 'qualified', language: convLang,
       });
 
-      const confirmMsg = confirmationMessage(input.pax_name, input.service_name, convLang);
+      const confirmMsg = confirmationMessage(input.pax_name, input.service_name, input.phone || `+${phone}`, convLang);
       await sock.sendMessage(from, { text: confirmMsg });
       console.log(`Lead created: ${input.pax_name} - ${input.service_name} (${lead?.id}) [${convLang}]`);
     }

@@ -27,9 +27,18 @@ let lastError = null;
 let cachedSettings = { system_prompt: null, claude_api_key: null };
 let lastAppliedApiKey = null;
 
+// Initialize Claude from env var immediately as fallback
+const envApiKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
+if (envApiKey) {
+  claude = new Anthropic({ apiKey: envApiKey });
+  lastAppliedApiKey = envApiKey;
+  console.log('Claude API key loaded from environment variable');
+}
+
 async function refreshBotSettings() {
   try {
-    const { data } = await supabase.from('wa_bot_settings').select('system_prompt, claude_api_key').eq('id', 'default').maybeSingle();
+    const { data, error } = await supabase.from('wa_bot_settings').select('system_prompt, claude_api_key').eq('id', 'default').maybeSingle();
+    if (error) { console.error('wa_bot_settings query error:', error.message); return; }
     if (data) {
       cachedSettings.system_prompt = data.system_prompt || null;
       const newKey = data.claude_api_key || null;
@@ -192,20 +201,41 @@ const tools = [
   },
 ];
 
-// ── Conversation helpers ──────────────────────────────────────────────────────
+// ── In-memory conversation cache (primary) + Supabase (async backup) ─────────
+const conversationCache = new Map();
+
 async function getOrCreateConversation(phone) {
-  const { data, error } = await supabase.from('wa_conversations').select('*').eq('phone', phone).maybeSingle();
-  if (error) throw new Error(`wa_conversations select failed: ${error.message}`);
-  if (data) return data;
-  const { data: newConv, error: insertErr } = await supabase.from('wa_conversations')
-    .insert({ phone, messages: [], stage: 'qualifying' }).select().single();
-  if (insertErr) throw new Error(`wa_conversations insert failed: ${insertErr.message}`);
+  if (conversationCache.has(phone)) return conversationCache.get(phone);
+
+  // Try loading from Supabase
+  try {
+    const { data } = await supabase.from('wa_conversations').select('*').eq('phone', phone).maybeSingle();
+    if (data) { conversationCache.set(phone, data); return data; }
+  } catch (err) {
+    console.error('Supabase select error:', err.message);
+  }
+
+  // Create new conversation (in memory first)
+  const newConv = { phone, messages: [], stage: 'qualifying', lead_id: null, language: null };
+  conversationCache.set(phone, newConv);
+
+  // Persist to Supabase async (don't block)
+  supabase.from('wa_conversations').insert({ phone, messages: [], stage: 'qualifying' })
+    .then(({ error }) => { if (error) console.error('Supabase insert error:', error.message); })
+    .catch(err => console.error('Supabase insert exception:', err.message));
+
   return newConv;
 }
 
 async function saveConversation(phone, messages, extra = {}) {
-  await supabase.from('wa_conversations')
-    .update({ messages, updated_at: new Date().toISOString(), ...extra }).eq('phone', phone);
+  // Update in-memory cache immediately (this always works)
+  const existing = conversationCache.get(phone) || { phone, messages: [], stage: 'qualifying' };
+  conversationCache.set(phone, { ...existing, messages, ...extra });
+
+  // Persist to Supabase async (don't block the reply)
+  supabase.from('wa_conversations').update({ messages, updated_at: new Date().toISOString(), ...extra }).eq('phone', phone)
+    .then(({ error }) => { if (error) console.error('Supabase update error:', error.message); })
+    .catch(err => console.error('Supabase update exception:', err.message));
 }
 
 // ── Confirmation messages by language ────────────────────────────────────────

@@ -89,33 +89,31 @@ http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/send') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const { phone, message } = JSON.parse(body);
-        if (!phone || !message) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ error: 'phone and message required' }));
-          return;
-        }
-        if (!currentSock || !botState.connected) {
-          res.statusCode = 503;
-          res.end(JSON.stringify({ error: 'Bot not connected to WhatsApp' }));
-          return;
-        }
-        let clean = String(phone).replace(/\D/g, '');
-        if (clean.startsWith('0')) clean = clean.slice(1);
-        if (clean.length === 10) clean = '91' + clean;
-        const jid = `${clean}@s.whatsapp.net`;
-        await currentSock.sendMessage(jid, { text: message });
-        console.log(`[/send] Sent to ${jid}: ${message.slice(0, 60)}...`);
-        res.end(JSON.stringify({ ok: true, sent_to: jid }));
-      } catch (err) {
-        res.statusCode = 500;
-        res.end(JSON.stringify({ error: err.message }));
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const { phone, message } = JSON.parse(Buffer.concat(chunks).toString());
+      if (!phone || !message) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'phone and message required' }));
+        return;
       }
-    });
+      if (!currentSock || !botState.connected) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ error: 'Bot not connected to WhatsApp' }));
+        return;
+      }
+      let clean = String(phone).replace(/\D/g, '');
+      if (clean.startsWith('0')) clean = clean.slice(1);
+      if (clean.length === 10) clean = '91' + clean;
+      const jid = `${clean}@s.whatsapp.net`;
+      await currentSock.sendMessage(jid, { text: message });
+      console.log(`[/send] Sent to ${jid}: ${message.slice(0, 60)}`);
+      res.end(JSON.stringify({ ok: true, sent_to: jid }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
 

@@ -17,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { formatINR, calcGST } from '@/utils/gst';
 import { useSettings } from '@/hooks/use-settings';
-import { buildWAUrl } from '@/utils/whatsapp';
+import { openWhatsApp } from '@/utils/whatsapp';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, MessageCircle, Phone, Mail, Upload, FileText, Clock, ExternalLink, Trash2, Pencil } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
@@ -252,10 +252,8 @@ export default function LeadDetail() {
       await updateLead.mutateAsync({ id: id!, updates: { status: newStatus }, logStatus: true });
       const updatedLead = { ...lead, status: newStatus };
       setNewStatus('');
-      const phone = lead.phone || lead.whatsapp;
-      const waUrl = phone ? buildWAUrl(updatedLead, 'status_update') : null;
       toast({ title: `Status updated to ${newStatus}` });
-      if (waUrl && waUrl !== '#') window.open(waUrl, '_blank');
+      if (lead.phone || lead.whatsapp) openWhatsApp(updatedLead, 'status_update');
     } catch (e: any) {
       toast({ title: 'Error', description: e.message, variant: 'destructive' });
     }

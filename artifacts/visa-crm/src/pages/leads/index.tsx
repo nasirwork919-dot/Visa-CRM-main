@@ -21,7 +21,7 @@ import { Link } from 'wouter';
 import { Plus, Search, Download, Phone, MessageCircle, Upload, FileText, X, SlidersHorizontal, AlertTriangle, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase';
-import { openWhatsApp, buildWAUrl } from '@/utils/whatsapp';
+import { openWhatsApp } from '@/utils/whatsapp';
 
 const STATUSES = ['All', 'Under Process', 'Follow-up', 'Submitted', 'Completed', 'Cancelled'];
 const SOURCES = ['All', 'Walk-in', 'Referral', 'Online', 'Phone', 'WhatsApp', 'Other'];
@@ -764,8 +764,6 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
               time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
             } : undefined;
 
-            const waUrl = buildWAUrl(effectiveLead, isPayment ? 'payment_received' : 'welcome', extraVars);
-
             const handleSendWA = async () => {
               // If payment details were filled after lead creation, save them to DB
               if (!isPayment && (currentFee !== (waLead.base_fee || 0) || currentPaid !== (waLead.amount_paid || 0))) {
@@ -783,10 +781,10 @@ function LeadFormModal({ open, onClose, lead }: { open: boolean; onClose: () => 
                     },
                   });
                 } catch {
-                  // non-critical — WA still opens
+                  // non-critical
                 }
               }
-              window.open(waUrl, '_blank');
+              await openWhatsApp(effectiveLead, isPayment ? 'payment_received' : 'welcome', extraVars);
               setWaLead(null);
               onClose();
             };

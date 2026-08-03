@@ -397,11 +397,16 @@ async function startBot() {
       botState.qr = null;
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log(`Connection closed (code: ${code})`);
-      if (code !== DisconnectReason.loggedOut) {
-        setTimeout(startBot, 3000);
-      } else {
-        setTimeout(startBot, 1000);
+      if (code === DisconnectReason.loggedOut || code === 401) {
+        // Session revoked — clear stale creds so next start shows a fresh QR
+        console.log('Session logged out — clearing credentials for fresh QR');
+        try {
+          await supabase.from('wa_auth_sessions').delete().eq('id', 'default');
+        } catch (_) {}
+        const authDir = path.join(__dirname, 'auth_info');
+        if (fs.existsSync(authDir)) fs.rmSync(authDir, { recursive: true, force: true });
       }
+      setTimeout(startBot, 2000);
     }
   });
 

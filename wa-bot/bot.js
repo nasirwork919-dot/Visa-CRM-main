@@ -298,7 +298,7 @@ async function handleMessage(sock, from, text) {
         service_name: input.service_name || '',
         pax_count: 1,
         notes: notes || null,
-        source: 'WhatsApp',
+        source: 'WhatsApp Bot',
         status: 'Under Process',
         base_fee: 0, gst_amount: 0, total_amount: 0, amount_paid: 0,
         payment_method: 'Cash',

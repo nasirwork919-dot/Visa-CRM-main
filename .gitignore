@@ -53,3 +53,4 @@ wa-bot/.env
 wa-bot/auth_info/
 wa-bot/node_modules/
 qr.png
+config.bat

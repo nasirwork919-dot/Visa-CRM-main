@@ -69,6 +69,11 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+  if (req.url === '/version') {
+    res.end(JSON.stringify({ version: '2cf6f18', send_endpoint: true }));
+    return;
+  }
+
   if (req.url === '/debug') {
     res.end(JSON.stringify({
       claude_initialized: claude !== null,
@@ -88,7 +93,7 @@ http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/send') {
+  if (req.method === 'POST' && (req.url === '/send' || req.url === '/send/')) {
     try {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
